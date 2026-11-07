@@ -19,26 +19,24 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 
 # --- LVGL ---
 CONFIG_LV_COLOR_DEPTH_16=y
-# 20 ms display refresh period targets up to 50 FPS when rendering and SPI
-# transfer complete within the same budget.
-CONFIG_LV_DEF_REFR_PERIOD=20
-CONFIG_LV_FONT_MONTSERRAT_14=y
-CONFIG_LV_FONT_MONTSERRAT_20=y
-# LVGL 内置 malloc 池大小(KB)。它是独立静态区、不与系统堆共享,配大了会白白占用 RAM。
-# 本 demo UI 简单,24KB 足够;若自建复杂界面出现绘制卡死/看门狗,调大此值。
-CONFIG_LV_MEM_SIZE_KILOBYTES=24
+# 活跃交互约 25 ms 刷新；主循环另有自适应延时，空闲仍会拉长。
+CONFIG_LV_DEF_REFR_PERIOD=25
+# Ashbox UI uses ashbox_font_16 only; demos that need Montserrat are not linked.
+# Tiny UNSCII keeps LVGL's required default font without Montserrat Flash fat (C-FAT1 / O-FAT).
+# LVGL examples/demos reference Montserrat — must stay off so FONT_MONTSERRAT_*=n can link.
+CONFIG_LV_BUILD_EXAMPLES=n
+CONFIG_LV_BUILD_DEMOS=n
+CONFIG_LV_FONT_MONTSERRAT_14=n
+CONFIG_LV_FONT_MONTSERRAT_20=n
+CONFIG_LV_FONT_UNSCII_8=y
+CONFIG_LV_FONT_DEFAULT_UNSCII_8=y
+# 余烬主屏对象更多：抬高 LVGL 池；半帧定格时优先查池而非驱动。
+CONFIG_LV_MEM_SIZE_KILOBYTES=48
+CONFIG_LV_TXT_ENC_UTF8=y
+CONFIG_LV_USE_FONT_PLACEHOLDER=y
 
 # --- 系统 ---
 CONFIG_FREERTOS_HZ=1000
 
-# --- Bluetooth LE / NimBLE ---
-# ESP32-C3 仅支持 BLE；示例只启用单连接 peripheral 所需的最小 host 配置。
-CONFIG_BT_ENABLED=y
-CONFIG_BT_NIMBLE_ENABLED=y
-CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
-CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
-CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
-CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
-CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
-CONFIG_BT_NIMBLE_HOST_BASED_PRIVACY=n
-CONFIG_BT_NIMBLE_NVS_PERSIST=n
+# 余烬离线放置：不启蓝牙。Wi-Fi 仍随 IDF 默认链接但应用从不 init（射频冷）。
+CONFIG_BT_ENABLED=n

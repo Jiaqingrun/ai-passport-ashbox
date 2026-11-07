@@ -1,20 +1,20 @@
-// main/main.c —— FoloToy AI Passport BSP 驱动参考示例:初始化 + 菜单 + 按键分发。
-//
-// 按键语义(全局统一):
-//   上/下 短按   菜单中=移动选中项;演示页中=该页自定义
-//   确定  短按   菜单中=进入选中项;演示页中=该页自定义
-//   确定  长按   演示页中=返回菜单(由本文件统一拦截)
-#include "bsp_i2c.h"
-#include "bsp_display.h"
-#include "bsp_button.h"
-#include "bsp_audio.h"
-#include "bsp_battery.h"
-#include "bsp_pins.h"      // 错误日志里要打印 BSP_LCD_* 引脚号
-#include "demo.h"
-#include "demo_navigation.h"
+#include "ashbox_embackup.h"
+#include "ashbox_game.h"
+#include "ashbox_runtime.h"
+#include "ashbox_save.h"
+#include "ashbox_settings.h"
+#include "ashbox_sfx.h"
+#include "ashbox_sleep.h"
+#include "ashbox_ui.h"
 #include "key_guard.h"
-#include "ui_pixel.h"
-#include "lvgl.h"
+
+#include "bsp_battery.h"
+#include "bsp_button.h"
+#include "bsp_display.h"
+#include "bsp_i2c.h"
+#include "bsp_pins.h"
+
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_sleep.h"
 #include "esp_timer.h"
@@ -22,149 +22,81 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
-static const char *TAG = "main";
+#include <sys/time.h>
+#include <time.h>
 
-static const demo_entry_t DEMOS[] = {
-    { .name = "Display", .enter = demo_display_enter, .exit = demo_display_exit,
-      .key = demo_display_key },
-    { .name = "Button", .enter = demo_button_enter, .exit = demo_button_exit,
-      .key = demo_button_key },
-    { .name = "Audio", .enter = demo_audio_enter, .exit = demo_audio_exit,
-      .key = demo_audio_key, .start = demo_audio_start, .stop = demo_audio_stop },
-    { .name = "Battery", .enter = demo_battery_enter, .exit = demo_battery_exit,
-      .key = demo_battery_key },
-    { .name = "Wi-Fi", .enter = demo_wifi_enter, .exit = demo_wifi_exit,
-      .key = demo_wifi_key, .start = demo_wifi_start, .stop = demo_wifi_stop },
-    { .name = "BLE", .enter = demo_ble_enter, .exit = demo_ble_exit,
-      .key = demo_ble_key, .start = demo_ble_start, .stop = demo_ble_stop },
-    { .name = "Low Power", .enter = demo_low_power_enter, .exit = demo_low_power_exit,
-      .key = demo_low_power_key, .start = demo_low_power_start, .stop = demo_low_power_stop },
-};
-#define DEMO_COUNT (sizeof(DEMOS) / sizeof(DEMOS[0]))
-#define INPUT_QUEUE_DEPTH 8
+static const char *TAG = "ashbox";
+
+#define INPUT_QUEUE_DEPTH 16
+#define KEY_GUARD_MAX_US (10LL * 1000 * 1000)
+#define DT_MAX_S (36LL * 3600)
+#define ASH_SLEEP_RTC_MAGIC 0xA54B51EEu
+
+/* Survives deep sleep (not power cut). Used when wall RTC rewound vs save timeline. */
+static RTC_DATA_ATTR uint32_t s_sleep_rtc_magic;
+static RTC_DATA_ATTR int64_t s_sleep_rtc_enter;
 
 typedef struct {
     bsp_btn_t btn;
     bsp_btn_ev_t event;
 } input_event_t;
 
-// 各外设初始化结果:失败的项在菜单里标 [FAIL] 且不允许进入。
-static bool s_ok[DEMO_COUNT];
-
-static lv_obj_t *s_menu_scr;
-static lv_obj_t *s_cards[DEMO_COUNT];
-static lv_obj_t *s_rows[DEMO_COUNT];
-static lv_obj_t *s_mascot;
-static demo_navigation_t s_navigation;
+static ash_game_t s_game;
 static QueueHandle_t s_input_queue;
 static TaskHandle_t s_input_task;
 static volatile bool s_input_ready;
+static key_guard_t s_key_guard;
+static bool s_session_trusted;
+static int64_t s_boot_unix;
 
-static void menu_refresh(void) {
-    for (size_t i = 0; i < DEMO_COUNT; i++) {
-        lv_label_set_text_fmt(s_rows[i], "%s%s",
-                              DEMOS[i].name,
-                              s_ok[i] ? "" : "  [FAIL]");
-        ui_pixel_set_selected(s_cards[i], i == s_navigation.selected, s_ok[i]);
-        lv_obj_set_style_text_color(s_rows[i],
-            s_ok[i] ? lv_color_hex(UI_INK) : lv_color_hex(0x7A2020), 0);
-    }
-}
-
-static void menu_build(void) {
-    s_menu_scr = ui_pixel_screen_create("FoloToy");
-
-    for (size_t i = 0; i < DEMO_COUNT; i++) {
-        int x = 11 + (int)(i % 2) * 112;
-        int y = 52 + (int)(i / 2) * 47;
-        s_cards[i] = ui_pixel_panel_create(s_menu_scr, x, y, 102, 40, UI_PAPER);
-        s_rows[i] = lv_label_create(s_cards[i]);
-        lv_obj_set_style_text_font(s_rows[i], &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_align(s_rows[i], LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_center(s_rows[i]);
-    }
-
-    s_mascot = ui_pixel_mascot_create(s_menu_scr, 101, 242);
-
-    menu_refresh();
-    lv_screen_load(s_menu_scr);
-}
-
-static void enter_menu(void) {
-    menu_build();
-}
-
-static demo_nav_input_t navigation_input(bsp_btn_t btn, bsp_btn_ev_t event) {
-    if (event == BSP_BTN_LONG && btn == BSP_BTN_OK) return DEMO_NAV_INPUT_OK_LONG;
-    if (event != BSP_BTN_CLICK) return DEMO_NAV_INPUT_OTHER;
-    if (btn == BSP_BTN_UP) return DEMO_NAV_INPUT_UP_CLICK;
-    if (btn == BSP_BTN_DOWN) return DEMO_NAV_INPUT_DOWN_CLICK;
-    if (btn == BSP_BTN_OK) return DEMO_NAV_INPUT_OK_CLICK;
-    return DEMO_NAV_INPUT_OTHER;
-}
-
-static void process_input(const input_event_t *input) {
-    demo_nav_input_t nav_input = navigation_input(input->btn, input->event);
-
-    if (s_navigation.active >= 0) {
-        demo_nav_result_t result = demo_navigation_handle(&s_navigation, nav_input, true);
-        const demo_entry_t *demo = &DEMOS[result.index];
-        if (result.action == DEMO_NAV_ACTION_EXIT) {
-            esp_err_t e = demo->stop ? demo->stop() : ESP_OK;
-            if (e != ESP_OK) {
-                ESP_LOGE(TAG, "%s 页面停止失败: %s", demo->name, esp_err_to_name(e));
-                return;
-            }
-            if (!bsp_lvgl_lock(500)) return;
-            demo->exit();
-            demo_navigation_complete_exit(&s_navigation);
-            enter_menu();
-            bsp_lvgl_unlock();
-        } else if (result.action == DEMO_NAV_ACTION_FORWARD) {
-            demo->key(input->btn, input->event);
+static void on_key(bsp_btn_t btn, bsp_btn_ev_t ev, void *user)
+{
+    (void)user;
+    if (s_key_guard.armed) {
+        /* Any key action ends the post-wake quiet UI immediately; keep
+           swallowing until release/timeout so the held wake key cannot
+           fire a LONG→sleep or other unintended action. */
+        if (ashbox_ui_wake_guard_active()) {
+            ESP_LOGI(TAG, "wake quiet ended by input");
+            /* Callback context: never take LVGL here (C-02). */
+            ashbox_ui_request_clear_wake_guard();
         }
-        return;
-    }
-
-    if (nav_input == DEMO_NAV_INPUT_OTHER || nav_input == DEMO_NAV_INPUT_OK_LONG) return;
-    if (!bsp_lvgl_lock(500)) return;
-    demo_nav_result_t result = demo_navigation_handle(
-        &s_navigation, nav_input, s_ok[s_navigation.selected]);
-    if (result.action == DEMO_NAV_ACTION_REFRESH) {
-        menu_refresh();
-        ui_pixel_mascot_jump(s_mascot);
-    } else if (result.action == DEMO_NAV_ACTION_ENTER) {
-        const demo_entry_t *demo = &DEMOS[result.index];
-        ui_pixel_mascot_jump(s_mascot);
-        lv_obj_delete(s_menu_scr);
-        s_menu_scr = NULL;
-        s_mascot = NULL;
-        demo->enter();
-        bsp_lvgl_unlock();
-
-        esp_err_t e = demo->start ? demo->start() : ESP_OK;
-        if (e != ESP_OK) {
-            ESP_LOGE(TAG, "%s 页面启动失败: %s", demo->name, esp_err_to_name(e));
+        if (key_guard_consume(&s_key_guard, ev == BSP_BTN_RELEASE, esp_timer_get_time())) {
+            return;
         }
-        return;
     }
-    bsp_lvgl_unlock();
+    if (!s_input_ready || !s_input_queue) return;
+    const input_event_t input = {.btn = btn, .event = ev};
+    (void)xQueueSend(s_input_queue, &input, 0);
 }
 
-static void input_task(void *arg) {
+static void input_queue_drain(void)
+{
+    input_event_t dump;
+    while (s_input_queue && xQueueReceive(s_input_queue, &dump, 0) == pdTRUE) {
+    }
+}
+
+static void input_task(void *arg)
+{
     (void)arg;
     input_event_t input;
     for (;;) {
         if (xQueueReceive(s_input_queue, &input, portMAX_DELAY) == pdTRUE) {
-            process_input(&input);
+            ashbox_ui_on_key(input.btn, input.event);
+            if (ashbox_ui_take_input_drain_request()) {
+                input_queue_drain();
+            }
         }
     }
 }
 
-static esp_err_t input_dispatch_init(void) {
+static esp_err_t input_dispatch_init(void)
+{
     s_input_queue = xQueueCreate(INPUT_QUEUE_DEPTH, sizeof(input_event_t));
     if (!s_input_queue) return ESP_ERR_NO_MEM;
-    if (xTaskCreate(input_task, "demo_input", 4096, NULL, 5, &s_input_task) != pdPASS) {
+    /* Above app_main loop so key paints are not stuck behind settle/SPI work. */
+    if (xTaskCreate(input_task, "ash_input", 4096, NULL, 6, &s_input_task) != pdPASS) {
         vQueueDelete(s_input_queue);
         s_input_queue = NULL;
         return ESP_ERR_NO_MEM;
@@ -172,108 +104,191 @@ static esp_err_t input_dispatch_init(void) {
     return ESP_OK;
 }
 
-static void input_dispatch_deinit(void) {
-    s_input_ready = false;
-    if (s_input_task) {
-        vTaskDelete(s_input_task);
-        s_input_task = NULL;
-    }
-    if (s_input_queue) {
-        vQueueDelete(s_input_queue);
-        s_input_queue = NULL;
-    }
+static int64_t wall_unix_now(void)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (int64_t)tv.tv_sec;
 }
 
-// Waking from deep sleep by key reboots the chip while that key is still held: the
-// button component starts a few hundred milliseconds later, registers a press that
-// is already down, and grades it a long press once it has been down for its
-// threshold (500 ms here), so an unintended action fires almost immediately. Drop
-// key actions until that press comes up; the deadline is only a safety net so a
-// stuck key cannot leave the pad dead. The state machine lives in key_guard.h so it
-// can be unit-tested without the rest of the demo.
-#define KEY_GUARD_MAX_US (10LL * 1000 * 1000)
-static key_guard_t s_key_guard;
+static void boot_settle(uint32_t wake_causes)
+{
+    ash_clock_info_t clk = {0};
+    int64_t now = wall_unix_now();
+    s_boot_unix = now;
 
-// button callbacks run on the shared esp_timer task; enqueue only and return immediately.
-static void on_key(bsp_btn_t btn, bsp_btn_ev_t ev, void *user) {
-    (void)user;
-    // Consume the guard before the readiness check: a release can arrive after the
-    // post-init voltage sample but before input dispatch is ready, and dropping it
-    // here would leave the guard armed to swallow the next real press.
-    const bool was_armed = s_key_guard.armed;
-    if (key_guard_consume(&s_key_guard, ev == BSP_BTN_RELEASE, esp_timer_get_time())) {
-        // The release and the deadline both arrive on this task; log the disarm
-        // transition once it happens.
-        if (was_armed && !s_key_guard.armed) {
-            ESP_LOGI(TAG, "唤醒键已松手,按键恢复响应");
+    bool deep = (wake_causes & (1u << ESP_SLEEP_WAKEUP_TIMER)) != 0 ||
+                (wake_causes & (1u << ESP_SLEEP_WAKEUP_GPIO)) != 0;
+    /* Deep-sleep wake: prefer wall delta when RTC still tracks the save timeline;
+     * otherwise use the RTC-domain stamp taken at sleep entry (power-cut safe for
+     * the sleep itself; full power-cut clears RTC_DATA and skips catch-up). */
+    if (deep) {
+        int64_t dt = -1;
+        if (ash_game_wall_unix_usable(&s_game, now) && s_game.last_settle_unix > 0) {
+            dt = now - s_game.last_settle_unix;
+        } else if (s_sleep_rtc_magic == ASH_SLEEP_RTC_MAGIC) {
+            dt = now - s_sleep_rtc_enter;
         }
-        return;
+        if (dt >= 0) {
+            if (dt > DT_MAX_S) dt = DT_MAX_S;
+            if (dt > 0) {
+                clk.trusted = true;
+                clk.in_deep_sleep_segment = true;
+                clk.dt_s = dt;
+                s_session_trusted = ash_game_wall_unix_usable(&s_game, now);
+            }
+        }
     }
-    if (!s_input_ready || !s_input_queue) return;
-    const input_event_t input = { .btn = btn, .event = ev };
-    (void)xQueueSend(s_input_queue, &input, 0);
+    s_sleep_rtc_magic = 0;
+
+    if (!clk.trusted) {
+        /* Power-on / RTC rewind: do not economy-advance, and never smash a good
+         * save timeline with epoch RTC (that reset day_key and 日勤). */
+        clk.trusted = false;
+        clk.dt_s = 0;
+        s_session_trusted = ash_game_wall_unix_usable(&s_game, now);
+        if (s_game.last_settle_unix <= 0) {
+            s_game.last_settle_unix = now;
+        } else if (ash_game_wall_unix_usable(&s_game, now) && now < s_game.last_settle_unix) {
+            /* Mild trusted rollback (E-03): re-anchor without inventing progress. */
+            s_game.last_settle_unix = now;
+        }
+    }
+    ashbox_runtime_lock();
+    ash_game_settle(&s_game, &clk);
+    if (ash_game_wall_unix_usable(&s_game, now)) {
+        ash_game_note_wall_time(&s_game, now);
+    }
+    ESP_LOGI(TAG, "boot_settle deep=%d dt=%lld day=%u settle=%lld wall=%lld usable=%d",
+             (int)deep, (long long)clk.dt_s, (unsigned)s_game.day_key,
+             (long long)s_game.last_settle_unix, (long long)now,
+             (int)ash_game_wall_unix_usable(&s_game, now));
+    (void)ashbox_save_store_mirrored(&s_game);
+    ashbox_runtime_unlock();
 }
 
-void app_main(void) {
-    ESP_LOGI(TAG, "FoloToy AI Passport BSP demo 启动");
+static bool key_is_held(void)
+{
+    const int mv = bsp_button_read_mv();
+    return mv >= 0 && mv < BSP_BTN_MV_RELEASED_MIN;
+}
+
+static esp_err_t try_sleep(void)
+{
+    /* settle to now before sleep */
+    int64_t now = wall_unix_now();
+    uint32_t alarm = 0;
+    ashbox_runtime_lock();
+    if (s_session_trusted && ash_game_wall_unix_usable(&s_game, now) &&
+        s_game.last_settle_unix > 0) {
+        ash_clock_info_t clk = {
+            .trusted = true,
+            .in_deep_sleep_segment = false,
+            .dt_s = now - s_game.last_settle_unix,
+        };
+        if (clk.dt_s < 0) clk.dt_s = 0;
+        if (clk.dt_s > DT_MAX_S) clk.dt_s = DT_MAX_S;
+        ash_game_settle(&s_game, &clk);
+    }
+    ash_game_note_wall_time(&s_game, now); /* no-op if RTC rewound vs save */
+    s_sleep_rtc_enter = now;
+    s_sleep_rtc_magic = ASH_SLEEP_RTC_MAGIC;
+    (void)ashbox_save_store_mirrored(&s_game);
+    if (s_game.exp.active && s_game.exp.remaining_s > 0) {
+        alarm = s_game.exp.remaining_s;
+        if (alarm > 28800) alarm = 28800;
+    }
+    {
+        uint32_t w = ash_game_wanderer_next_wake_s(&s_game);
+        if (w != UINT32_MAX && w > 0) {
+            if (w > 28800) w = 28800;
+            if (alarm == 0 || w < alarm) alarm = w;
+        }
+    }
+    ashbox_runtime_unlock();
+    ESP_LOGI(TAG, "entering deep sleep alarm=%u", (unsigned)alarm);
+    return ashbox_enter_deep_sleep(alarm);
+}
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "余烬 Ashbox starting");
     const uint32_t wake_causes = esp_sleep_get_wakeup_causes();
     if (wake_causes & ~(1u << ESP_SLEEP_WAKEUP_UNDEFINED)) {
-        ESP_LOGI(TAG, "休眠唤醒原因位图: 0x%02x", (unsigned)wake_causes);
+        ESP_LOGI(TAG, "wakeup causes: 0x%02x", (unsigned)wake_causes);
     }
-    // 按键唤醒时,那颗键在整个启动期间还按着。先挡住它的动作(见 on_key)。
     if (wake_causes & (1u << ESP_SLEEP_WAKEUP_GPIO)) {
         key_guard_arm(&s_key_guard, esp_timer_get_time(), KEY_GUARD_MAX_US);
-        ESP_LOGI(TAG, "按键唤醒:先屏蔽按键动作,直到那颗键松手");
+        ESP_LOGI(TAG, "GPIO wake: arm key guard");
     }
+
+    ESP_ERROR_CHECK(ashbox_save_init());
+    ashbox_runtime_init();
+    if (ashbox_save_load(&s_game) != ESP_OK) {
+        ESP_LOGE(TAG, "save missing/corrupt — starting NEW run (progress reset)");
+        ash_game_new(&s_game);
+        s_game.last_settle_unix = wall_unix_now();
+        ashbox_runtime_lock();
+        (void)ashbox_save_store_mirrored(&s_game);
+        ashbox_runtime_unlock();
+    } else {
+        ESP_LOGI(TAG, "resume food=%u pop=%u day=%u", (unsigned)s_game.food,
+                 (unsigned)s_game.pop, (unsigned)s_game.day_key);
+        if (s_game.exp.active) {
+            ESP_LOGI(TAG, "loaded expedition rem=%us / %us tier=%u",
+                     (unsigned)s_game.exp.remaining_s, (unsigned)s_game.exp.duration_s,
+                     (unsigned)s_game.exp.tier);
+        }
+    }
+
+    boot_settle(wake_causes);
 
     bsp_i2c_init();
     bsp_i2c_scan();
-
-    // 屏幕是本 demo 的 UI 载体,失败就没有菜单可言 —— 打清楚日志后退出,
-    // 不做"串口菜单"降级(那会让本文件复杂一倍,违背参考示例的初衷)。
     if (bsp_display_init() != ESP_OK || !bsp_lvgl_init()) {
-        ESP_LOGE(TAG, "显示/LVGL 初始化失败,demo 无法继续。"
-                      "检查 SPI 接线(MOSI=%d SCLK=%d CS=%d DC=%d BL=%d)",
+        ESP_LOGE(TAG, "display/LVGL init failed MOSI=%d SCLK=%d CS=%d DC=%d BL=%d",
                  BSP_LCD_MOSI, BSP_LCD_SCLK, BSP_LCD_CS, BSP_LCD_DC, BSP_LCD_BL);
         return;
     }
-    bsp_display_backlight(100);
+    (void)bsp_battery_init();
+    (void)ashbox_sfx_init();
 
-    demo_navigation_init(&s_navigation, DEMO_COUNT);
-
-    // 其余外设单项失败不阻塞:菜单里标 [FAIL],其他项照常可测。
-    s_ok[0] = true;                                   // Display 已确认可用
-    esp_err_t input_err = input_dispatch_init();
-    esp_err_t button_err = input_err == ESP_OK
-                         ? bsp_button_init(on_key, NULL)
-                         : ESP_ERR_INVALID_STATE;
-    s_ok[1] = input_err == ESP_OK && button_err == ESP_OK;
-    if (input_err != ESP_OK) {
-        ESP_LOGE(TAG, "按键事件任务创建失败: %s", esp_err_to_name(input_err));
-    } else if (button_err != ESP_OK) {
-        ESP_LOGE(TAG, "按键初始化失败: %s", esp_err_to_name(button_err));
-        input_dispatch_deinit();
-    } else if (s_key_guard.armed) {
-        // 若唤醒键在按键驱动启动前就已松手,组件不会产生 release 事件,守卫会一直
-        // 拦到兜底。初始化完成后按真实电压同步一次:已松手立即撤防。
+    ESP_ERROR_CHECK(input_dispatch_init());
+    ESP_ERROR_CHECK(bsp_button_init(on_key, NULL));
+    if (s_key_guard.armed) {
         const bool released = bsp_button_read_mv() >= BSP_BTN_MV_RELEASED_MIN;
         key_guard_sync_released(&s_key_guard, released);
         if (!s_key_guard.armed) {
-            ESP_LOGI(TAG, "唤醒键在按键驱动启动前已松手,提前撤防");
+            ESP_LOGI(TAG, "wake key already up before button init");
         }
     }
-    s_ok[2] = (bsp_audio_init() == ESP_OK);
-    s_ok[3] = (bsp_battery_init() == ESP_OK);
-    s_ok[4] = true;                                    // 页面内按需初始化并显示错误
-    s_ok[5] = true;
-    s_ok[6] = true;
 
-    if (bsp_lvgl_lock(1000)) {
-        enter_menu();
-        bsp_lvgl_unlock();
-        s_input_ready = true;
+    ashbox_ui_start(&s_game, s_key_guard.armed);
+    ashbox_embackup_start(ashbox_ui_flush_persistent);
+    s_input_ready = true;
+
+    for (;;) {
+        ashbox_ui_tick();
+        if (ashbox_ui_wants_deep_sleep()) {
+            /* Long-press OK arms sleep while the key is still down. Wait for
+               release; any new press cancels via ashbox_ui_on_key. Soft-mute
+               only after the key is clear — prepare_deep_sleep is irreversible. */
+            if (key_is_held()) {
+                /* keep request pending */
+            } else {
+                ashbox_sfx_stop_all();
+                const esp_err_t err = try_sleep();
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "deep sleep refused: %s — restore audio",
+                             esp_err_to_name(err));
+                    ashbox_ui_on_deep_sleep_aborted();
+                }
+            }
+        }
+        /* Adaptive: ~40 ms while awake (snappy keys/anim), slower when dim/blank. */
+        int delay_ms = ashbox_ui_tick_delay_ms();
+        if (delay_ms < 20) delay_ms = 20;
+        if (delay_ms > 200) delay_ms = 200;
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
     }
-
-    ESP_LOGI(TAG, "就绪:Display=%d Button=%d Audio=%d Battery=%d",
-             s_ok[0], s_ok[1], s_ok[2], s_ok[3]);
 }

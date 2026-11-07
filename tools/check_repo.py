@@ -33,6 +33,9 @@ ROOT_MARKDOWN_ALLOWLIST = {
     "CLAUDE.zh_CN.md",
     "README.md",
     "README.zh_CN.md",
+    # Ashbox / QR project conventions (English default + Chinese peer)
+    "PROJECT.md",
+    "PROJECT.zh_CN.md",
 }
 # Register only concrete, vendored component directories, e.g. "components/foo".
 # These exemptions never change the input to sensitive-content/conflict checks.

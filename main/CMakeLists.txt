@@ -1,16 +1,38 @@
 idf_component_register(
     SRCS "main.c"
-         "demo_navigation.c"
-         "ui_pixel.c"
-         "ui_pixel_math.c"
-         "demo_display.c"
-         "demo_button.c"
-         "demo_audio.c"
-         "demo_battery.c"
-         "demo_radio.c"
-         "demo_wifi.c"
-         "demo_ble.c"
-         "demo_low_power.c"
+         "ashbox_game.c"
+         "ashbox_game_loot.c"
+         "ashbox_content.c"
+         "ashbox_save.c"
+         "ashbox_meta.c"
+         "ashbox_settings.c"
+         "ashbox_sfx.c"
+         "ashbox_sleep.c"
+         "ashbox_runtime.c"
+         "ashbox_ui.c"
+         "ashbox_help_copy.c"
+         "ashbox_sprites.c"
+         "ashbox_embackup_proto.c"
+         "ashbox_embackup.c"
     INCLUDE_DIRS "."
-    REQUIRES bsp bt esp_event esp_hw_support esp_netif esp_timer esp_wifi nvs_flash
+    REQUIRES bsp nvs_flash esp_timer esp_hw_support app_update driver esp_partition
 )
+
+target_sources(${COMPONENT_LIB} PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../assets/fonts/ashbox_font_16.c"
+)
+
+# 广播事件：真人录音 PCM（mono s16le @16kHz），见 assets/ashbox/sfx/SOURCES.txt
+set(_ASH_SFX_DIR "${CMAKE_CURRENT_LIST_DIR}/../assets/ashbox/sfx")
+foreach(_pcm radio_scream_f radio_scream_m radio_help radio_search radio_laugh hearth_fire)
+    target_add_binary_data(${COMPONENT_LIB} "${_ASH_SFX_DIR}/${_pcm}.pcm" BINARY)
+endforeach()
+
+# 场景精灵 indexed+RLE（ASR1）；由 tools/ashbox_sprites_encode.py 生成
+set(_ASH_SPR_DIR "${CMAKE_CURRENT_LIST_DIR}/../assets/ashbox/sprites_rle")
+set(_ASH_SPR_SCENES idle away weak threat return night gate duo farm stash trade watch)
+foreach(_sc ${_ASH_SPR_SCENES})
+    foreach(_fi 0 1 2)
+        target_add_binary_data(${COMPONENT_LIB} "${_ASH_SPR_DIR}/${_sc}_f${_fi}.bin" BINARY)
+    endforeach()
+endforeach()

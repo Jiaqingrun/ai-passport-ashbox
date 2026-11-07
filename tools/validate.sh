@@ -5,7 +5,43 @@ mode="${1:---all}"
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage() {
-    echo "Usage: $0 [--all|--static|--firmware]" >&2
+    echo "Usage: $0 [--all|--static|--ashbox|--firmware]" >&2
+}
+
+run_ashbox_host_tests() {
+    local test_dir
+    test_dir="$(mktemp -d /tmp/ai-passport-ashbox-host.XXXXXX)"
+    python3 tools/check_ashbox_font_glyphs.py
+    python3 tools/check_ashbox_dead_branches.py
+    python3 tools/check_ashbox_copy_layout.py
+    python3 tools/check_ashbox_glossary.py
+    python3 tools/ashbox_sprites_encode.py --check
+    python3 tools/ashbox_sprites_encode.py --verify-only
+    # Forbid LVGL leakage into pure rules TUs (C-BOUND1).
+    if rg -n '\blv_' main/ashbox_game.c main/ashbox_game_loot.c main/ashbox_content.c main/ashbox_save.c main/ashbox_meta.c; then
+        echo "ERROR: lv_ symbols must not appear in ashbox rules/save units" >&2
+        rm -rf "${test_dir}"
+        return 1
+    fi
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+        -Imain -Itests/bsp_stubs -Itests/nvs_stubs \
+        tests/test_ashbox_game.c tests/nvs_stubs/nvs_host.c \
+        main/ashbox_game.c main/ashbox_game_loot.c main/ashbox_content.c main/ashbox_meta.c \
+        -o "${test_dir}/test_ashbox_game"
+    "${test_dir}/test_ashbox_game"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_ashbox_embackup.c main/ashbox_embackup_proto.c \
+        -o "${test_dir}/test_ashbox_embackup"
+    "${test_dir}/test_ashbox_embackup"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+        -Imain -Itests/bsp_stubs -Itests/nvs_stubs \
+        tests/test_ashbox_save.c tests/nvs_stubs/nvs_host.c \
+        main/ashbox_save.c main/ashbox_game.c main/ashbox_game_loot.c \
+        main/ashbox_content.c main/ashbox_meta.c \
+        -o "${test_dir}/test_ashbox_save"
+    "${test_dir}/test_ashbox_save"
+    rm -rf "${test_dir}"
+    echo "Ashbox host tests: PASS"
 }
 
 run_static_checks() {
@@ -13,6 +49,7 @@ run_static_checks() {
     local test_dir
 
     python3 tools/check_repo.py
+    run_ashbox_host_tests
 
     actionlint_bin="${ACTIONLINT_BIN:-}"
     if [[ -z "${actionlint_bin}" ]]; then
@@ -61,10 +98,14 @@ run_static_checks() {
         tests/test_bsp_audio_recovery.c components/bsp/src/bsp_es8311_sleep_check.c \
         -o "${test_dir}/test_bsp_audio_recovery"
     "${test_dir}/test_bsp_audio_recovery"
+    local gc_sections_flag="-Wl,--gc-sections"
+    case "$(uname -s)" in
+        Darwin) gc_sections_flag="-Wl,-dead_strip" ;;
+    esac
     for demo in audio low_power ble wifi; do
         "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
             -ffunction-sections -fdata-sections -Itests/demo_stubs -Imain \
-            "tests/test_demo_${demo}_runtime.c" -Wl,--gc-sections \
+            "tests/test_demo_${demo}_runtime.c" ${gc_sections_flag} \
             -o "${test_dir}/test_demo_${demo}_runtime"
         "${test_dir}/test_demo_${demo}_runtime"
     done
@@ -113,6 +154,10 @@ case "${mode}" in
         ;;
     --static)
         run_static_checks
+        ;;
+    --ashbox)
+        python3 tools/check_repo.py
+        run_ashbox_host_tests
         ;;
     --firmware)
         run_firmware_checks

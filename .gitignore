@@ -5,6 +5,9 @@ managed_components/
 .vscode/
 .idea/
 
+# Local publish staging (binaries, copy drafts); never commit credentials or merged images
+.publish-staging/
+
 # Generated repository-local links; canonical skill sources live in skills/.
 /.agents/skills/passport-develop
 /.agents/skills/passport-setup

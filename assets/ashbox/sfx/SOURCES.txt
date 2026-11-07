@@ -1,0 +1,20 @@
+Ashbox radio / hearth samples — real recordings (CC0 / public domain)
+All converted to mono 16 kHz s16le PCM for ESP playback.
+
+radio_scream_f.pcm  <- Freesound 175385 "Scream" by DigitalDominic (CC0)
+radio_scream_m.pcm  <- Freesound 173945 male scream by JohnsonBrandEditing (CC0), trimmed loudest window
+radio_help.pcm      <- Freesound 457961 "Screaming Help" by Fabrizio84 (CC0 / public domain)
+radio_search.pcm    <- OpenGameArt "Oh My" by rubenwardy (CC0)
+radio_laugh.pcm     <- OpenGameArt "Evil Laugh" by AntumDeluge (CC0) — author: "Me... laughing"
+
+hearth_fire.pcm     <- Freesound 410404 "fire crackling, fireplace, BBQ"
+                       by AlexanderChe (CC0). Chosen for low hiss/rumble vs
+                       continuous-roar fireplace beds that read as radio static
+                       on the tiny speaker:
+                       https://freesound.org/people/AlexanderChe/sounds/410404/
+                       Processing: mono 16 kHz; HP~160/LP~2800; -8 dB treble
+                       shelf; compressor+limiter soften sharp pops; two offset
+                       layers densify crackles; loop edge fades.
+                       Firmware loops; no procedural radio static.
+
+Button UI tones remain procedural beeps (not radio).

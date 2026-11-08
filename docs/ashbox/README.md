@@ -22,7 +22,8 @@ Offline post-apocalypse idle game for FoloToy AI Passport.
 - Strict audit round 2026-11-06 (Flash + whole-code, mandatory sections PASS): [AUDIT_STRICT.md](./AUDIT_STRICT.md)
 - Strict game-code bug audit 2026-11-07 (Flash + optimization rails; bug verdict FAIL): [AUDIT_BUG.md](./AUDIT_BUG.md)
 - Strict audit 2026-11-07 (Flash + code + **persistence** dual-slot/clock/chore flush): [AUDIT_20261107.md](./AUDIT_20261107.md) — prior persistence snapshot
-- **Full strict audit 2026-11-08** (Flash + code + copy layout; SAVE_VER 13; stack fix-forward): [AUDIT_FULL_20261108.md](./AUDIT_FULL_20261108.md) — current standing audit snapshot
+- **Full strict audit 2026-11-08** (Flash + code + copy layout; SAVE_VER 13; stack fix-forward): [AUDIT_FULL_20261108.md](./AUDIT_FULL_20261108.md) — full baseline for this round
+- **Strict audit round 2 2026-11-08** (Flash + code + copy layout; ABI unchanged; archive retention): [AUDIT_STRICT_20261108.md](./AUDIT_STRICT_20261108.md) — current standing audit snapshot
 
 - Hub: station duty (awake play), farm (two fields · grain/root), stash + furniture, Iron Shed / Ash River trade; hunt needs gate open (unlocks the station door to the hunt path)
 - Player-facing planning copy: route sublines show loot ranges / empty-handed probability / rares / ember catch-up; person rows show biases; build footer + scrollable Help list the rates and sources

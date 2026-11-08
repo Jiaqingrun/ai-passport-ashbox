@@ -17,7 +17,7 @@
 ```
 
 ```text
-Build: PASS（本轮归档 e02c57b5…；设备在跑 445875b7…，同源码、同尺寸）
+Build: PASS（最新归档 bec09599…；设备在跑 c3f1011f…，均为同一源码的拆页构建）
 Host tests: PASS（--ashbox：仓库 + 字形 + 死枝 + 文案版式 + 用语表 + 精灵 + game/embackup/save，含本轮新增 v12 冻结 fixture）
 Device tests: PASS（保档刷 + 20 s 启动日志，ELF 哈希匹配，无 panic）
 Unverified: 帮助页换行手感 · NVS 擦除救援路径 · 高压 USB 导入
@@ -85,7 +85,7 @@ Unverified: 帮助页换行手感 · NVS 擦除救援路径 · 高压 USB 导入
 
 | ID | 优先级 | 证据 | 建议 | 体验/存档 | 下一步 |
 | --- | --- | --- | --- | --- | --- |
-| F-UI1 | P1 | `ashbox_ui.c` **4,628** 行；`style_init` 8,864 B、`build_screen` 3,620 B、`resolve_return` 3,522 B、`paint_build` 3,220 B、`paint_home` 2,816 B | 拆交易 / 装备 / 仓库 / 帮助页 | 无 ABI | 再动枢纽时拆 |
+| F-UI1 | **已收口** | `ashbox_ui.c` 4,628 → **3,379** 行；9 个页面单元（help/trade/stash/equip/pick/build/survivors/settings/farm）共约 1,270 行，共享契约 `ashbox_ui_page.h`；整机重编 app 仍 2,924,960 B | — | 无 ABI | 真机点检九个页面 |
 | F-GAME1 | P1 | `ashbox_game.c` **4,403** 行 | 继续拆归来 / 危机 | ABI 可稳 | 结构冲刺 |
 | F-UI-HEAP | P2 | LVGL 内建池仅 **48 KiB**（`work_mem_int` 0xC000）；开机后 `lv_free=16,760`、`lv_used=63%` | 拆页前先量控件预算；禁止无测算新增多层卡片 | 无 | 拆 UI 前先做控件基线 |
 | F-COVER-UI | P2 | 未进宿主测：`ashbox_ui.c` 4,628、`ashbox_sfx.c` 503、`ashbox_embackup.c` 434、`ashbox_sprites.c` 205、`ashbox_settings.c` 162 | 把可外提的纯逻辑（选择/文案拼装/音量映射）移入可测单元 | 无 | 与拆页同做 |
@@ -97,7 +97,7 @@ Unverified: 帮助页换行手感 · NVS 擦除救援路径 · 高压 USB 导入
 ### 冲刺顺序
 
 1. 真机确认帮助换行 + 本镜像开机（本轮已刷，待观感）
-2. UI 拆页（先做 LVGL 堆与控件基线）
+2. 真机点检九个页面（重点 trade / build / pick 的输入分支与列表滚动）
 3. 可选 Flash P3
 4. 顺手把 F-MIG-PAD 的一行清零随下次固件带进去
 
@@ -124,6 +124,8 @@ Unverified: 帮助页换行手感 · NVS 擦除救援路径 · 高压 USB 导入
 2. `docs/ashbox/BUILD.md` / `.zh_CN.md`：归档身份更新、`ver 11` → `ver 13` / blob 776、归档保留规则。
 3. 固件归档 **118 → 21**（释放 2.09 GB），保留集与删除集登记在 `build/firmware/ARCHIVE_INDEX.md`（本机、已 gitignore）。
 4. 新增宿主测试 `tests/test_ashbox_save.c`：744 B 冻结 v12 fixture + 迁移路径断言，另用三次失败注入证明断言有效。**仅测试，不改产品代码。**
+5. UI 拆页收口（C-UI1）：九页全部拆成独立编译单元（help / trade / stash / equip / pick / build / survivors / settings / farm），共享状态、控件助手与页面表长收敛到 `ashbox_ui_page.h`；`tools/check_ashbox_copy_layout.py` 改为扫描 `main/ashbox_ui*.c`。最终重编 `bec09599…`，app 仍为 2,924,960 B。
+6. 拆页等价性核查：与拆前 `e02c57b5…` 做全固件函数比对，4,038 个函数中 4,034 个指令序列完全相同；其余 4 个（`activate_trade` / `paint_build` / `paint_farm` / `go_back`）差异仅为块重排、分支松弛与地址取值，调用集合一致。
 
 以上前 3 项为文档与运维，第 4 项为测试；均不改变固件行为，产品代码自 `feeac35` 起未变。
 

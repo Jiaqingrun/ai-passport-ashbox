@@ -17,7 +17,7 @@ Audit rail: Copy layout = PASS
 ```
 
 ```text
-Build: PASS (this round's archive e02c57b5…; the device runs 445875b7…, same source and size)
+Build: PASS (newest archive bec09599…; the device runs c3f1011f…, both split builds of the same source)
 Host tests: PASS (--ashbox: repo + glyphs + dead branches + copy layout + glossary + sprites + game/embackup/save, including the new frozen v12 fixture)
 Device tests: PASS (preserve-save flash + 20 s boot log, ELF hash matched, no panic)
 Unverified: help-page line wrapping by eye · NVS erase rescue path · high-load USB import
@@ -85,7 +85,7 @@ Compared with [AUDIT_FULL_20261108](./AUDIT_FULL_20261108.md): `app` **+3,280 B*
 
 | ID | Priority | Evidence | Suggestion | UX/save impact | Next step |
 | --- | --- | --- | --- | --- | --- |
-| F-UI1 | P1 | `ashbox_ui.c` **4,628** lines; `style_init` 8,864 B, `build_screen` 3,620 B, `resolve_return` 3,522 B, `paint_build` 3,220 B, `paint_home` 2,816 B | Split trade / gear / stash / help pages | No ABI | Split when the hub is touched next |
+| F-UI1 | **Closed** | `ashbox_ui.c` 4,628 → **3,379** lines; nine page units (help/trade/stash/equip/pick/build/survivors/settings/farm) totalling about 1,270 lines behind the shared `ashbox_ui_page.h` contract; full rebuild keeps the app at 2,924,960 B | — | No ABI | Walk the nine pages on device |
 | F-GAME1 | P1 | `ashbox_game.c` **4,403** lines | Keep splitting return / crisis | ABI can stay stable | Structural sprint |
 | F-UI-HEAP | P2 | LVGL builtin pool is only **48 KiB** (`work_mem_int` 0xC000); after boot `lv_free=16,760`, `lv_used=63%` | Measure widget budget before splitting pages; no extra card layers without a measurement | None | Widget baseline before the UI split |
 | F-COVER-UI | P2 | Not in host tests: `ashbox_ui.c` 4,628, `ashbox_sfx.c` 503, `ashbox_embackup.c` 434, `ashbox_sprites.c` 205, `ashbox_settings.c` 162 | Move extractable pure logic (selection, copy assembly, volume mapping) into testable units | None | Do it together with the page split |
@@ -97,7 +97,7 @@ Compared with [AUDIT_FULL_20261108](./AUDIT_FULL_20261108.md): `app` **+3,280 B*
 ### Sprint order
 
 1. Confirm help wrapping and boot on the device (flashed this round, awaiting eyes)
-2. Split the UI pages (measure the LVGL heap and widget budget first)
+2. Walk all nine pages on device (watch the trade / build / pick input branches and list scrolling)
 3. Optional Flash P3
 4. Carry the one-line F-MIG-PAD fix along with the next firmware change
 
@@ -124,6 +124,8 @@ Compared with [AUDIT_FULL_20261108](./AUDIT_FULL_20261108.md): `app` **+3,280 B*
 2. `docs/ashbox/BUILD.md` / `.zh_CN.md`: refreshed archive identity, `ver 11` → `ver 13` / blob 776, archive retention rule.
 3. Firmware archives **118 → 21** (2.09 GB freed); the kept and pruned sets are recorded in `build/firmware/ARCHIVE_INDEX.md` (local, gitignored).
 4. New host test in `tests/test_ashbox_save.c`: a 744-byte frozen v12 fixture plus migration assertions, with three failure injections proving the assertions bite. **Test only; no product code changed.**
+5. UI split closed (C-UI1): all nine pages are separate translation units with shared state, widget helpers and page sizes in `ashbox_ui_page.h`; `tools/check_ashbox_copy_layout.py` scans `main/ashbox_ui*.c`. Final rebuild `bec09599…`, app still 2,924,960 B.
+6. Equivalence check against the pre-split `e02c57b5…`: of 4,038 functions, 4,034 keep an identical opcode sequence; the other four (`activate_trade`, `paint_build`, `paint_farm`, `go_back`) differ only by block reordering, branch relaxation and address materialisation, with identical call sets.
 
 Items 1–3 are documentation and ops, item 4 is test-only; none changes firmware behaviour, and no product code has changed since `feeac35`.
 

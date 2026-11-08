@@ -37,7 +37,7 @@ FoloToy AI Passport 上的**离线**末世据点放置游戏《余烬》（Ashbo
 | 产品文档索引 | [`docs/ashbox/README.md`](./docs/ashbox/README.md)（中英配对，现行文必须入索引） |
 | 上游通用文档 | `docs/development/`、`docs/hardware-design/`（板级事实优先级见 `AGENTS.md`） |
 
-QR 项目 ID：`ai-passport-ashbox`（路径 `~/QR/dev/ai-passport-ashbox`）。MCP / `qr ask` / `qr log -p` 用此名或 `dev/ai-passport-ashbox`。
+QR 项目 ID：`ai-passport-ashbox`。现行工作区：`~/DeepSeek/AI Passport/余烬`（含完整 Git 历史，分支 `feature/ashbox-ember`）；原 Cursor 工作区 `~/QR/dev/ai-passport-ashbox` 只作只读参考。本地知识库 MCP（`qr-knowledge`）已停用，勿再依赖 `qr ask` / `qr log -p`。
 
 ---
 
@@ -224,7 +224,7 @@ QR 项目 ID：`ai-passport-ashbox`（路径 `~/QR/dev/ai-passport-ashbox`）。
 - 必备技能：`passport-develop`、`passport-setup`、`passport-build`、`passport-device-test`、`passport-debug`；缺则自行安装后再开工  
 - 实现后主动询问是否刷机；检测端口 ≠ 同意刷写  
 - 交付前遵守上文「改后严格审计」  
-- 里程碑决策：`qr log -p ai-passport-ashbox --type decision "…"`  
+- 里程碑决策：记入 `docs/ashbox/` 现行文或提交信息；本地知识库 MCP 已停用，勿用 `qr log -p`  
 - **`qr rules`：** 只采纳 `.cursor/rules/00-personal-standards.mdc` 与 `10-project.mdc`。本仓 `AGENTS.md` / `AGENTS.zh_CN.md` 是上游 Passport 权威入口，**禁止**被汇总稿覆盖后提交；若被改写立即 `git checkout -- AGENTS.md AGENTS.zh_CN.md`  
 
 ---
@@ -234,7 +234,8 @@ QR 项目 ID：`ai-passport-ashbox`（路径 `~/QR/dev/ai-passport-ashbox`）。
 | 项 | 状态 |
 | --- | --- |
 | 可玩闭环 | 已上线社区；本机持续迭代 |
-| 存档 | v10（铁/制造/装备/药品/过路客等） |
+| 存档 | v13（`ASHBOX_SAVE_VER=13`，blob 776；旧档可迁移） |
 | 布局 | LAYOUT_LOCK 已定死 |
 | Flash | 见 FLASH_SIZE_PLAN；审计每次复核 |
-| 社区公开名 | 以商店当前通过版为准（1.4 大白话说明已送审；以审核结果为准） |
+| 社区公开名 | 商店现行 **1.7** 送审稿为基线；此后只做增量修改（见 `COMMUNITY_PUBLISH.zh_CN.md`） |
+| 现行镜像 | 以 `build/firmware/` 最新归档为准；具体哈希写进最近一次审计快照 |

@@ -35,7 +35,7 @@ Display names: Ember (Chinese title in the `.zh_CN` peer) · tree: `ai-passport-
 | Font | `assets/fonts/ashbox_font_16.c` ← `main/ashbox_font_symbols.txt` |
 | Product docs index | [`docs/ashbox/README.md`](./docs/ashbox/README.md) |
 
-QR project id: `ai-passport-ashbox`.
+QR project id: `ai-passport-ashbox`. Active workspace: the DeepSeek copy under `~/DeepSeek/AI Passport/` (full Git history, branch `feature/ashbox-ember`); the former Cursor workspace `~/QR/dev/ai-passport-ashbox` is read-only reference. The local knowledge-base MCP (`qr-knowledge`) is retired — do not rely on `qr ask` or `qr log -p`.
 
 ---
 
@@ -111,4 +111,18 @@ After any Ashbox product change (rules / UI / player copy / help / settings) in 
 Required skills: `passport-develop`, `passport-setup`, `passport-build`, `passport-device-test`, `passport-debug`.  
 After firmware changes, ask whether to flash; do not flash without approval.  
 Default: no `git commit` / `push` / community publish / full erase / merge `@0x0` flash.  
+Milestone decisions: record them in the current `docs/ashbox/` document or the commit message; the local knowledge-base MCP is retired, so do not use `qr log -p`.  
 Post-change: follow **Post-change strict audit** above before claiming the task done.
+
+---
+
+## Current stage (summary)
+
+| Item | Status |
+| --- | --- |
+| Playable loop | Live in the community store; iterated locally since |
+| Save | v13 (`ASHBOX_SAVE_VER=13`, blob 776; older saves migrate) |
+| Layout | Locked by LAYOUT_LOCK |
+| Flash | Tracked in FLASH_SIZE_PLAN; re-checked by every audit |
+| Community listing | The current **1.7** submission is the baseline; only incremental edits from then on (see `COMMUNITY_PUBLISH.md`) |
+| Current image | The newest archive under `build/firmware/`; the exact hash goes into the latest audit snapshot |

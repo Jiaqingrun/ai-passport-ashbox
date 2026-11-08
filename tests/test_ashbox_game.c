@@ -173,6 +173,60 @@ static void test_depart_preview_matches_roll(void)
     assert(ash_game_depart_fail_pct(&g, ASH_TIER_BLOCK, 0, 0, 0) == 15);
 }
 
+/* Audit: the fortify price shown, checked and deducted must be the same number. */
+static void test_crisis_fortify_cost_banded(void)
+{
+    ash_game_t g;
+    new_game(&g);
+    g.expedition_total = 5;
+    g.threat = 95; /* band 2: cost 3 + 2 = 5 */
+    g.crisis.pending = true;
+    assert(ash_game_crisis_band(&g) == 2);
+    assert(ash_game_crisis_fortify_cost(&g) == 5);
+    g.parts = 4;
+    assert(!ash_game_crisis_option_ok(&g, ASH_CRISIS_FORTIFY)); /* never underflow */
+    g.parts = 5;
+    assert(ash_game_crisis_option_ok(&g, ASH_CRISIS_FORTIFY));
+    int before = (int)g.threat;
+    assert(ash_game_resolve_crisis(&g, ASH_CRISIS_FORTIFY));
+    assert(g.parts == 0);
+    assert((int)g.threat < before);
+}
+
+/* Audit: an armed trip spends exactly one round, even after an assault save. */
+static void test_armed_trip_spends_one_round(void)
+{
+    ash_game_t g;
+    new_game(&g);
+    g.food = 50;
+    g.water = 50;
+    g.pistol = 1;
+    g.ammo = 2;
+    assert(ash_game_start_expedition_ex(&g, ASH_TIER_SHORT, 0, 0, 1, 1));
+    assert(g.ammo == 1); /* deducted at departure */
+    g.exp.remaining_s = 1;
+    ash_game_settle(&g, &(ash_clock_info_t){.trusted = true, .dt_s = 2});
+    assert(!g.report.pending || g.report.branch_count >= 0);
+    assert(g.ammo == 1); /* one round spent, the rest returned */
+    assert(g.exp_ammo == 0);
+}
+
+/* Audit: a save cleared before arcs existed gets the first arc on its next settle. */
+static void test_legacy_clear_arms_arc(void)
+{
+    ash_game_t g;
+    new_game(&g);
+    g.run_cleared = 1;
+    g.quest_done[0] = 1;
+    g.quest_done[1] = 1;
+    g.quest2_done = 1;
+    g.lore_twist = 1;
+    assert(ash_game_arc_stage(&g) == 0);
+    assert(ash_game_try_clear(&g));
+    assert(ash_game_arc_stage(&g) == 1);
+    assert(g.quest_step[0] == 3 && g.quest2_step == 2);
+}
+
 static void test_water_system(void)
 {
     ash_game_t g;
@@ -304,7 +358,10 @@ static void test_join_respects_beds_and_wipeout(void)
 
     assert(ash_game_upgrade(&g, 0)); /* dorm L2 -> three beds */
     assert(ash_game_beds(&g) == 3);
-    assert(ash_game_upgrade(&g, 2)); /* workshop L3 tops the tier cap */
+    assert(g.pop == 2);              /* beds alone do not add a body */
+    assert(ash_game_pop_cap(&g) == 2);
+    assert(ash_game_upgrade(&g, 1)); /* kitchen L2 raises the tier cap */
+    assert(ash_game_pop_cap(&g) == 3);
     assert(g.pop == 3);
     assert(g.person[2].id == 2);
 
@@ -2307,6 +2364,9 @@ int main(void)
     test_long_run_no_wrap();
     test_post_clear_arc();
     test_depart_preview_matches_roll();
+    test_crisis_fortify_cost_banded();
+    test_armed_trip_spends_one_round();
+    test_legacy_clear_arms_arc();
     test_crisis_bands_and_breach();
     test_branch_pool_filters_by_state();
     test_quest_second_beat();

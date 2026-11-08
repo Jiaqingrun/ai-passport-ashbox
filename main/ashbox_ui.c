@@ -1732,10 +1732,11 @@ static void paint_report(void)
             return;
         }
         set_modal_visible(false);
-        s_list_sel = -1; /* no preselected branch: the player must choose */
+        /* Keep the player's selection across repaints; -1 only means "not chosen yet". */
+        if (s_list_sel < 0 || s_list_sel >= n) s_list_sel = -1;
         paint_list_sel(n);
-        set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "选定", false, true);
-        lv_label_set_text(s_hint, "上下选一条 · 长按返回");
+        set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "选定", s_list_sel >= 0, true);
+        lv_label_set_text(s_hint, "上下选一条 · 长按回据点");
         s_focus = 0;
         return;
     }
@@ -2230,7 +2231,7 @@ static void activate_home(void)
         }
         if (s_g->report.pending) {
             ashbox_sfx_play(ASH_SFX_CONFIRM);
-            s_list_sel = 0;
+            s_list_sel = -1; /* the branch must be chosen, never inherited from home focus */
             enter_page(UI_REPORT);
             paint_report();
             return;
@@ -3253,7 +3254,10 @@ void ashbox_ui_on_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             enter_page(UI_HOME);
             paint_home();
         } else if (s_page == UI_REPORT) {
-            /* 战报须醒着明确抉择；深睡不自动选 */
+            /* Leave the report pending but let the player back out to the hub; no
+             * choice is made by leaving, and the report waits on home. */
+            enter_page(UI_HOME);
+            paint_home();
         }
         goto key_out;
     }
@@ -3303,6 +3307,7 @@ void ashbox_ui_on_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             /* Dismiss the trip brief and hand the player the branch rows. */
             s_report_briefed = true;
             s_block_modal = false;
+            s_list_sel = -1;
             set_modal_visible(false);
             ashbox_sfx_play(ASH_SFX_CLICK);
             paint_report();
@@ -3412,6 +3417,7 @@ void ashbox_ui_tick(void)
         const char *wake_why = NULL;
         if (s_g->report.pending && !had_report) {
             s_report_briefed = false;
+            s_list_sel = -1;
             s_night_aftermath = true;
             urgent = true;
             need_wake = true;

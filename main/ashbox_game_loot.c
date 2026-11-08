@@ -24,12 +24,12 @@ static void apply_loot_bias(const ash_game_t *g, uint8_t pid, ash_tier_t tier, a
             (tier == ASH_TIER_DEEP || tier == ASH_TIER_NIGHT))
             *ember = 1;
     }
-    /* G-6: later arcs pay less, so the second run is not a victory lap. */
+    /* G-6: later arcs pay less, so the second run is not a victory lap.
+     * Parts are rolled after this bias, so their cut is applied at the call site. */
     {
         int stage = ash_game_arc_stage(g);
         if (stage == 1) *food = (*food * 3 + 2) / 4;
         else if (stage == 2) *food = (*food * 3 + 2) / 5;
-        if (stage > 0) *parts = (*parts * 3) / 5;
     }
     if (g->deep_loot_bonus && tier == ASH_TIER_DEEP) {
         *food = (*food * 11 + 5) / 10;
@@ -240,6 +240,7 @@ void ash_game_apply_success_core_loot(ash_game_t *g, ash_report_t *r, uint8_t pi
     }
     apply_loot_bias(g, pid, tier, load, &food, &parts, &ember);
     parts = parts_loot_roll(g, pid, tier, load, seed ^ 0xA5u, has_pack);
+    if (ash_game_arc_stage(g) > 0) parts = (parts * 3) / 5; /* G-6 leaner arcs */
     int iron = iron_loot_for_tier(tier, seed);
     if (has_pack) iron += 2; /* 背包：铁加法，不翻倍粮水 */
     {

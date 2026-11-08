@@ -14,3 +14,6 @@ managed_components/
 /.agents/skills/passport-build
 /.agents/skills/passport-device-test
 /.agents/skills/passport-debug
+
+# macOS Finder metadata
+.DS_Store

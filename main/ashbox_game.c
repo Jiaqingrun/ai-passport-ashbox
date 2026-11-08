@@ -677,10 +677,15 @@ int ash_game_crowbar_carry_cap(const ash_game_t *g, uint8_t person_id)
 int ash_game_pop_cap(const ash_game_t *g)
 {
     if (!g) return 1;
-    if (g->pop == 0) return 1; /* wipeout: always allow first wanderer */
+    if (g->pop == 0) return 1; /* wipeout: always allow the first wanderer */
+    /* One body per kitchen tier from L2 up, plus one for a real workshop; beds
+     * still bound the result, and the super core is what lifts the ceiling to 6. */
     int cap = 1;
-    if (g->kitchen_lv >= 2) cap = 2;
-    if (g->workshop_lv >= 2) cap = 3;
+    if (g->kitchen_lv >= 2) cap++;
+    if (g->kitchen_lv >= 3) cap++;
+    if (g->kitchen_lv >= 4) cap++;
+    if (g->kitchen_lv >= 5) cap++;
+    if (g->workshop_lv >= 2) cap++;
     int beds = ash_game_beds(g);
     if (cap > beds) cap = beds;
     return cap;
@@ -2104,6 +2109,9 @@ static void resolve_return(ash_game_t *g, bool success)
     uint8_t carried_crowbar = g->exp_crowbar;
     uint8_t carried_pistol = g->exp_pistol;
     uint8_t carried_ammo = g->exp_ammo;
+    /* B-8: an armed trip spends one round whatever the outcome; the assault save
+     * consumes that same round, never a second one. */
+    if (carried_pistol && carried_ammo > 0) carried_ammo--;
     e->active = false;
     e->remaining_s = 0;
     g->chore_kind = ASHBOX_CHORE_NONE;
@@ -2314,8 +2322,7 @@ static void resolve_return(ash_game_t *g, bool success)
         }
         ash_death_kind_t death = roll_death_kind(tier, seed, g->threat);
         bool died = false;
-        if (death == ASH_DEATH_ASSAULT && carried_pistol && carried_ammo > 0) {
-            carried_ammo--;
+        if (death == ASH_DEATH_ASSAULT && carried_pistol) {
             g->exp_ammo = carried_ammo;
             death = ASH_DEATH_NONE;
             ash_game_log(g, "手枪挡袭击 · 捡回一命");
@@ -2371,7 +2378,6 @@ static void resolve_return(ash_game_t *g, bool success)
             }
             /* B-8: one round is spent by an armed trip even without an assault,
              * so carrying the pistol is a running cost, not free insurance. */
-            if (carried_pistol && carried_ammo > 0) carried_ammo--;
             g->ammo = sat_add_u8(g->ammo, carried_ammo, 99);
             g->exp_crowbar = 0;
             g->exp_pistol = 0;
@@ -2929,11 +2935,8 @@ bool ash_game_start_expedition(ash_game_t *g, ash_tier_t tier, uint8_t person_id
 static void try_join_people(ash_game_t *g)
 {
     if (!g || g->pop == 0) return;
-    int cap = 1;
-    if (g->kitchen_lv >= 2) cap = 2;
-    if (g->workshop_lv >= 2) cap = 3;
-    int beds = ash_game_beds(g);
-    if (cap > beds) cap = beds;
+    /* One source of truth: the same cap a wanderer must satisfy. */
+    int cap = ash_game_pop_cap(g);
     while (g->pop > 0 && g->pop < cap && g->pop < ASHBOX_PERSON_MAX) {
         unsigned idx = g->pop;
         ash_person_t *p = ash_game_person_mut(g, idx);
@@ -3294,6 +3297,8 @@ static int fortify_cost(const ash_game_t *g)
     return cost;
 }
 
+static int crisis_fortify_cost_at(const ash_game_t *g, int band);
+
 bool ash_game_crisis_option_ok(const ash_game_t *g, ash_crisis_opt_t opt)
 {
     if (!g || !g->crisis.pending) return false;
@@ -3308,7 +3313,7 @@ bool ash_game_crisis_option_ok(const ash_game_t *g, ash_crisis_opt_t opt)
         return count_present(g) >= 1;
     }
     case ASH_CRISIS_FORTIFY:
-        return g->parts >= (uint16_t)fortify_cost(g);
+        return g->parts >= (uint16_t)crisis_fortify_cost_at(g, ash_game_crisis_band(g));
     case ASH_CRISIS_HIDE:
         /* Always legal: even an empty station can barricade behind the door, so a
          * pending crisis can never leave the player without an option. */
@@ -3318,10 +3323,19 @@ bool ash_game_crisis_option_ok(const ash_game_t *g, ash_crisis_opt_t opt)
     }
 }
 
+/* G-3: the later bands cost more; option availability, the UI price and the
+ * deduction must all read the same number or the deduction underflows. */
+static int crisis_fortify_cost_at(const ash_game_t *g, int band)
+{
+    int cost = fortify_cost(g) + band;
+    if (cost > 5) cost = 5;
+    return cost;
+}
+
 uint16_t ash_game_crisis_fortify_cost(const ash_game_t *g)
 {
     if (!g) return 0;
-    return (uint16_t)fortify_cost(g);
+    return (uint16_t)crisis_fortify_cost_at(g, ash_game_crisis_band(g));
 }
 
 int ash_game_crisis_band(const ash_game_t *g)
@@ -3363,8 +3377,7 @@ bool ash_game_resolve_crisis(ash_game_t *g, ash_crisis_opt_t opt)
         break;
     }
     case ASH_CRISIS_FORTIFY: {
-        int cost = fortify_cost(g) + band;
-        if (cost > 5) cost = 5;
+        int cost = crisis_fortify_cost_at(g, band);
         g->parts = (uint16_t)(g->parts - (uint16_t)cost);
         int th = (int)g->threat - (40 + band * 2);
         if (th < 10) th = 10;
@@ -4663,6 +4676,10 @@ bool ash_game_try_clear(ash_game_t *g)
     if (!g) return false;
     int stage = ash_game_arc_stage(g);
     if (g->run_cleared) {
+        if (stage == 0) {
+            arm_arc(g, (uint8_t)ASH_WORLD_ARC_A, 3, 3, 2);
+            return true;
+        }
         /* Later arcs complete only once; reaching the end leaves the game open. */
         if (stage != 1 && stage != 2) return false;
         if (!quest_done_of(g, 0) || !quest_done_of(g, 1) || !quest_done_of(g, 2)) return false;

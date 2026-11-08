@@ -2,11 +2,12 @@
 
 # Community store update checklist (Ember)
 
-Use this when preparing the next publisher update for play **1943**.
+Use this when preparing the next publisher update for play **1943**. Release entry and install
+source: [`publish-to-community.md`](../development/release/publish-to-community.md).
 
 ## Copy change policy (hard · 2026-11-08)
 
-From the **Ember 1.7** submission onward, store **description** and **instructions** are a frozen baseline:
+Store **description** and **instructions** are a frozen baseline. The live baseline is the store's latest **approved** revision:
 
 - **Incremental edits only by default:** change paragraphs that match real firmware changes in this release; **do not** fully rewrite, expand into an encyclopedia, or do unrelated polish rewrites each publish.
 - **Changelog:** only this release’s landed additions/fixes; do not restate the whole playbook.

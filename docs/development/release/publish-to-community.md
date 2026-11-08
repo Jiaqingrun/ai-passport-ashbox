@@ -1,64 +1,52 @@
-<p align="right">
-  <a href="publish-to-community.zh_CN.md">简体中文</a> · <strong>English</strong>
-</p>
+[简体中文](./publish-to-community.zh_CN.md) · **English**
 
 # Publish to the AI Passport Community
 
-This document describes how to publish this project's firmware to the [AI Passport Community](https://ai-passport.folotoy.cn). This page is the human-facing entry point; it tells an AI assistant to install the publisher skill from the official bundle and run the workflow.
+Human-facing entry point for releasing this project's firmware to the
+[AI Passport Community](https://ai-passport.folotoy.cn). A release is not a commit: commit during
+development, release only when the firmware is finished and usable.
 
-## When to use this
+## Decide the destination first
 
-Use this when the project is being **released** — that is, when the code is finished, usable, and ready to ship. A release is not a commit: a commit saves progress during development, while a release happens only when development is complete and the firmware actually works. This page covers the publish decision; for development itself, see the development and commit rules.
+- **Community** — publish the firmware to the market; follow the workflow below.
+- **Git** — commit the finished code, then open a release. The artifact may come from CI
+  (tag-triggered `.github/workflows/build-firmware.yml`) or from a local build; follow
+  [`commit-and-pr.md`](../../contribution/commit-and-pr.md) and the
+  [CI release flow](../ci/CI-build-and-release.md).
+- **Not yet** — the code is unfinished; keep developing.
 
-When the developer says "publish" or "release", the first thing to decide is **where** to publish. Do not assume a route.
+## Community workflow
 
-- **To the community** — release the firmware to the [AI Passport Community market](https://ai-passport.folotoy.cn). Use the publisher workflow below. See also the [project completion flow](project-completion.md) once it is published.
-- **To Git** — publish the finished code to a version-controlled repository. The flow is: commit the finished code, then open a release for it. The release artifact may be produced by the CI/CD pipeline (**recommended**, tag-triggered via `.github/workflows/build-firmware.yml`), or it may be a local `.bin` the developer already built. Follow the repository commit and PR rules (`docs/contribution/commit-and-pr.md`) and the fork workflow (`docs/fork-guide.md`); see [`CI-build-and-release.md`](../ci/CI-build-and-release.md) for the automated build and release artifacts.
-- **Neither yet** — the code is not finished and usable; keep developing, do not publish.
+Install the official publisher and run it for this project, then review its preview before anything
+is uploaded: `https://ai-passport.folotoy.cn/skills/folotoy-ai-passport-publisher.zip`.
 
-The workflow is driven by the official publisher skill. Running the prompt once makes the assistant install the skill from the official bundle; nothing is committed into the repository.
+The publisher skill defines the exact steps (inspect the project, prepare bilingual title and
+description, resolve the source page, prepare and validate a cover, authorize through the official
+site, preview every field). The repository does not store or commit that skill.
 
-## Reproduce the bundled prompt
+## Required inputs
 
-To run the publishing workflow, copy the prompt to your AI assistant. The paste-ready prompt is reproduced verbatim in the Simplified Chinese peer [`publish-to-community.zh_CN.md`](publish-to-community.zh_CN.md); it requests installing the assistant at `https://ai-passport.folotoy.cn/skills/folotoy-ai-passport-publisher.zip`, then inspecting the project, preparing bilingual title and description, choosing a cover, resolving the HTTPS Git source, authorizing through the official site, and confirming every field before uploading.
+- **Firmware** — the merged image `build/FoloToy-AI-Passport-full.bin`. It must pass
+  `./tools/validate.sh --firmware` and the [firmware layout](../engineering/firmware-layout.md).
+  Never substitute the app-only image from `idf.py build`.
+- **Cover** — portrait 3:4 JPEG / PNG / WebP, at most 10 MiB.
+- **Source** — the public HTTPS Git page of the firmware repository (GitHub, Gitee, GitLab,
+  Codeberg, or another reachable HTTPS Git page). A fork owner publishes from the fork's own page.
 
-The skill's `SKILL.md` defines the exact workflow: inspect the project, prepare bilingual title and description, resolve the HTTPS Git source, prepare and validate a cover, authorize through the official site, then preview every field and obtain approval before uploading.
-
-## What the assistant will need from you
-
-- **Firmware**: the single merged ESP image
-  `build/FoloToy-AI-Passport-full.bin`. It must pass
-  `./tools/validate.sh --firmware`, including the
-  [configured firmware layout](../engineering/firmware-layout.md).
-  Never substitute the app-only `.bin` produced by `idf.py build`.
-- **Cover**: a representative JPEG / PNG / WebP image (<= 10 MiB).
-- **Source**: the public HTTPS Git page for the firmware repository — GitHub, Gitee, GitLab, Codeberg, or another publicly reachable HTTPS Git repository page. A fork owner publishes from their fork's source page, resolved from `git remote -v`.
-
-## Safety and boundaries
+## Boundaries
 
 - Upload only to `https://ai-passport.folotoy.cn`. Publishing and updating are external mutations.
-- Validation, drafting, and preview that is not confirmed by the author does **not** authorize upload.
-- Authorization credentials are never requested, received, or stored by the assistant. The creator registers or signs in on the official site and approves the displayed code; the assistant never handles their password.
-- Never retry a rejected upload automatically. Report the server response and resolve the cause with the creator first.
-- Do not weaken, bypass, or remove the firmware-layout gate merely to make a
-  community submission pass. Fix the image layout or build packaging instead.
+- A preview the author has not confirmed does not authorize upload.
+- The assistant never requests, receives, or stores authorization credentials.
+- Never retry a rejected upload automatically; report the response and resolve the cause first.
+- Never weaken, bypass, or remove the firmware-layout gate to make a submission pass.
+- An update uses the one-time update prompt issued by the official site; never reuse an old code.
 
-## How the assistant installs the skill
+## After publishing
 
-The assistant fetches the official bundle from the URL in the prompt and follows the workflow described in its `SKILL.md`. No skill needs to be kept or committed in this repository; the prompt reproduces the official install source each time.
-
-## After publishing: archive to reference
-
-Once the firmware is published, ask the developer whether to archive this application
-into the upstream repository's [`docs/reference/`](../../reference/README.md) application
-archive. If they agree, generate an AI-generated functional summary for the application under
-the repository-relative `docs/reference/<username>/<app-name>/` (bilingual
-`README.md` / `.zh_CN.md`). The archive is
-**text-only**: record the cover image only by its file name and format as publish
-metadata, and do **not** commit the cover image into `docs/reference/` (see the convention in
-[`docs/reference/README.md`](../../reference/README.md)). Register the application
-in both language versions of that index. Do not store the firmware `.bin` here
-either. Use the `plays-archive` skill, which opens the archive PR against the
-upstream `FoloToy/ai-passport`.
-
-This keeps the release's application discoverable in-repository for later querying.
+Ask the developer whether to archive the application into the upstream
+[`docs/reference/`](../../reference/README.md) archive. If so, generate a bilingual text-only
+summary under `docs/reference/<username>/<app-name>/` (bilingual `README.md` / `.zh_CN.md`),
+record the cover only as file name and format, register it in both index languages, and use the
+`plays-archive` skill to open the PR against upstream `FoloToy/ai-passport`. Do not commit the
+cover image or a firmware `.bin` there.

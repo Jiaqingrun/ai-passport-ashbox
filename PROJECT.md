@@ -81,7 +81,7 @@ Authoritative Chinese wording lives in [`PROJECT.zh_CN.md`](./PROJECT.zh_CN.md) 
 
 **Game content (hard):** Help/guide, route/loot/person/loadout lines, build/trade/gear/farm/order/duty/crisis UI copy, branch labels/options, away lines, quest steps, journal, radio pools, and player-visible `ash_game_log` lines. Write cause→effect in plain talk; mechanics sentences must state what the numbers mean; narrative may have mood but must be speakable aloud—no author-only slang. New systems update Help and route sublines in the same change.
 
-**Scope:** `ashbox_ui` / player strings in `ashbox_game` / `ashbox_content` / Help; community `description_*` / `instructions_*` / `changelog_*` (play-first, no chip/framework names; **from 1.7 onward store description/instructions are incremental-only vs the live baseline—no unsolicited full rewrites**, see [`docs/ashbox/COMMUNITY_PUBLISH.md`](./docs/ashbox/COMMUNITY_PUBLISH.md)). Identifiers may keep English (`pistol`, `ammo`); player strings must not leak old slang.
+**Scope:** `ashbox_ui` / player strings in `ashbox_game` / `ashbox_content` / Help; community `description_*` / `instructions_*` / `changelog_*` (play-first, no chip/framework names; store copy is **incremental against the approved baseline — no unsolicited full rewrites**, see [`docs/ashbox/COMMUNITY_PUBLISH.md`](./docs/ashbox/COMMUNITY_PUBLISH.md)). Identifiers may keep English (`pistol`, `ammo`); player strings must not leak old slang.
 
 **Font:** new CJK → `ashbox_font_symbols.txt` + regenerate `ashbox_font_16.c`; run `check_ashbox_font_glyphs.py`. Shorten before truncating critical names against `ASHBOX_JOURNAL_LEN` / `snprintf` buffers.
 
@@ -124,5 +124,5 @@ Post-change: follow **Post-change strict audit** above before claiming the task 
 | Save | v13 (`ASHBOX_SAVE_VER=13`, blob 776; older saves migrate) |
 | Layout | Locked by LAYOUT_LOCK |
 | Flash | Tracked in FLASH_SIZE_PLAN; re-checked by every audit |
-| Community listing | The current **1.7** submission is the baseline; only incremental edits from then on (see `COMMUNITY_PUBLISH.md`) |
+| Community listing | Baseline is the store's latest **approved** revision; later updates edit incrementally (see `COMMUNITY_PUBLISH.md`) |
 | Current image | The newest archive under `build/firmware/`; the exact hash goes into the latest audit snapshot |

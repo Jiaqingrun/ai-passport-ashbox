@@ -209,12 +209,11 @@ QR 项目 ID：`ai-passport-ashbox`。现行工作区：`~/DeepSeek/AI Passport/
 
 ## 社区与发布
 
-- 技能：`folotoy-ai-passport-publisher`；目标站默认 `https://ai-passport.folotoy.cn`  
-- 玩法项目 ID（现行）：`1943` / slug `community-c919dfca`（以 `publisher.py projects` 为准）  
-- 对外文案 play-first：禁止 ESP/LVGL/分辨率等工程词进入标题与简介；**同时遵守上文「玩家文案与游戏内容 · 大白话」**  
-- 游戏介绍／说明以现行商店（或最近送审）稿为基线：**只随本版玩法／规则更新做对应修改**，不再每次大幅重写；细则见 [`docs/ashbox/COMMUNITY_PUBLISH.zh_CN.md`](./docs/ashbox/COMMUNITY_PUBLISH.zh_CN.md)  
-- 更新说明（changelog）只写本版已落地的改动  
-- 更新必须带中英 changelog；社区安装须声明会清空进度  
+- 入口：[`docs/development/release/publish-to-community.zh_CN.md`](./docs/development/release/publish-to-community.zh_CN.md)（发布流程与安装源只写在该页，其它文档不复述）  
+- 技能 `folotoy-ai-passport-publisher`；目标站只 `https://ai-passport.folotoy.cn`；玩法项目 ID `1943` / slug `community-c919dfca`  
+- 对外文案 play-first：标题与简介禁工程词；细则见 [`COMMUNITY_PUBLISH.zh_CN.md`](./docs/ashbox/COMMUNITY_PUBLISH.zh_CN.md)  
+- 商店简介／说明以**现行已批准稿**为基线，只随本版玩法做对应增量修改；更新须带中英 changelog，只写本版改动  
+- 社区安装／更新会整机清空，对外文案不得承诺保档  
 - 一次性授权用尽后不得硬重试；请用户重新下发官方更新提示  
 
 ---
@@ -237,5 +236,5 @@ QR 项目 ID：`ai-passport-ashbox`。现行工作区：`~/DeepSeek/AI Passport/
 | 存档 | v13（`ASHBOX_SAVE_VER=13`，blob 776；旧档可迁移） |
 | 布局 | LAYOUT_LOCK 已定死 |
 | Flash | 见 FLASH_SIZE_PLAN；审计每次复核 |
-| 社区公开名 | 商店现行 **1.7** 送审稿为基线；此后只做增量修改（见 `COMMUNITY_PUBLISH.zh_CN.md`） |
+| 社区公开名 | 基线取商店**最近一次已批准**修订；此后只做增量修改（见 `COMMUNITY_PUBLISH.zh_CN.md`） |
 | 现行镜像 | 以 `build/firmware/` 最新归档为准；具体哈希写进最近一次审计快照 |

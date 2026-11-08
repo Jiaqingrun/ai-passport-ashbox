@@ -4,8 +4,15 @@
 
 Latest verified firmware archive:
 
-- Archive: `build/firmware/f0d150b367e5be4813a5ed70a299b8062d9f325016746155ea0e5c178630593c`
+- Archive: `build/firmware/445875b747cdcf8075afa6db55fd937df0280cca9737c22eb917203af8d16050`
+- Built: 2026-11-08 10:38, ESP-IDF v5.5.3
+- App image: 2,924,960 B = 35.1% of the 8,323,072 B factory partition (64.9% free)
+- ELF sha256: `d76466afc5cc42126326c35ab916485732714666f697bda9c400ab29ec4aec02`
 - Verify: `python3 tools/archive_firmware.py verify <archive-directory>`
+
+### Firmware archive retention (local housekeeping)
+
+`build/firmware/` is a local build output directory and is gitignored. This repository's actual rule: keep every archive referenced by maintained documentation, the 3 newest archives, and the newest archive of each calendar day; prune the rest. The kept and pruned sets are recorded in `build/firmware/ARCHIVE_INDEX.md`. This is local developer housekeeping, not a product contract.
 
 ## Flashing and saves (important)
 
@@ -31,4 +38,4 @@ Local development still uses `flash_ashbox_preserve_save.sh`; that script is **n
 
 Also: expedition remaining time is flushed to NVS about every **15 s** while awake (and immediately on depart / report / crisis / chore). Preserve-save flashing alone is not enough if the firmware never persisted the countdown.
 
-Save format: NVS namespace `ashbox` key `save`, magic `ASH2` / current ver 11 (older versions migrate; CRC failure creates a safe new game). Authority: `ASHBOX_SAVE_VER` in `main/ashbox_game.h`.
+Save format: NVS namespace `ashbox` key `save`, magic `ASH2` / current ver 13, blob 776 B (older versions migrate; CRC failure creates a safe new game). Authority: `ASHBOX_SAVE_VER` in `main/ashbox_game.h` and `ASHBOX_SAVE_BLOB_SIZE` in `main/ashbox_save.h`.

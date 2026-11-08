@@ -7,25 +7,18 @@
 - 分支：`feature/ashbox-ember`
 - 独立应用 UI（禁止沿用硬件测试 demo 菜单壳）
 - 规则：`main/ashbox_game.c` + 内容表 `main/ashbox_content.c`（宿主单测）
-- 存档：NVS 命名空间 `ashbox`、键 `save`，magic `ASH2` / `ASHBOX_SAVE_VER=13` blob 776（旧版可迁移；见 [EXTENSION.zh_CN.md](./EXTENSION.zh_CN.md) / [AUDIT.zh_CN.md](./AUDIT.zh_CN.md)）；元进度键 `meta` / `ASHM` — [META_PROGRESS.zh_CN.md](./META_PROGRESS.zh_CN.md)；项目约定见根目录 [`PROJECT.md`](../../PROJECT.md)
+- 存档：NVS 命名空间 `ashbox`、键 `save`，magic `ASH2` / `ASHBOX_SAVE_VER=13` blob 776（旧版可迁移；见 [EXTENSION.zh_CN.md](./EXTENSION.zh_CN.md)）；元进度键 `meta` / `ASHM` — [META_PROGRESS.zh_CN.md](./META_PROGRESS.zh_CN.md)；项目约定见根目录 [`PROJECT.md`](../../PROJECT.md)
 - USB 存档：设置页「备份存档 / 导入存档」实现 `!EMBACKUP`（与 [AI-Passport_BS 存档管家](https://github.com/Jiaqingrun/AI-Passport_BS) 对接；现行 ZIP：`save-manager-v1.0.1`）
 - 下次社区更新说明清单（管家链接、`RESTORED 3`、命名空间）：[COMMUNITY_PUBLISH.zh_CN.md](./COMMUNITY_PUBLISH.zh_CN.md)
 - 刷机：日常用保档脚本 `./tools/flash_ashbox_preserve_save.sh <口>`（只写 `0x10000`）；合并镜像 `0x0` 会清空存档，仅空白机或明确清档时用（见 [BUILD.zh_CN.md](./BUILD.zh_CN.md)）。**社区安装/更新须声明会清空进度，不是保档刷机。**
 - 内容填充方案（审计 + Phase F / G）：[CONTENT_FILL.zh_CN.md](./CONTENT_FILL.zh_CN.md)
-- 内容审计 Phase G（叙事 / UX）：[AUDIT_CONTENT_G.zh_CN.md](./AUDIT_CONTENT_G.zh_CN.md)
-- 十轮严格审计（合规 / 内容 / 互动 / 延伸 / 玩法 / 代码 / 功耗 / 优化）：[AUDIT_10R.zh_CN.md](./AUDIT_10R.zh_CN.md)
-- 底层代码审计（存档 ABI / 任务与锁 / 深睡 / 音频）：[AUDIT_CODE.zh_CN.md](./AUDIT_CODE.zh_CN.md)
-- 画面 / UI / 布局 / 按钮 / 重叠 / 字库三轮审计：[AUDIT_UI_VISUAL.zh_CN.md](./AUDIT_UI_VISUAL.zh_CN.md)
-- 家园布局锁（已定死）：[LAYOUT_LOCK.zh_CN.md](./LAYOUT_LOCK.zh_CN.md)
-- Flash / 体积无损压缩方案：[FLASH_SIZE_PLAN.zh_CN.md](./FLASH_SIZE_PLAN.zh_CN.md)
-- **审计硬轨**（每次审计必含 Flash 体积 + 整体代码优化 + 玩家文案版式；改后严格审计并当场修）：[AUDIT_REQUIREMENTS.zh_CN.md](./AUDIT_REQUIREMENTS.zh_CN.md) · 项目约定见 [`PROJECT.md`](../../PROJECT.md) · 宿主门禁 `tools/check_ashbox_copy_layout.py`
-- 严格审计轮 2026-11-06（Flash + 整体代码，两项必做 PASS）：[AUDIT_STRICT.zh_CN.md](./AUDIT_STRICT.zh_CN.md)
-- 游戏代码严格 Bug 审计 2026-11-07（Flash + 优化硬轨；bug 总评 FAIL）：[AUDIT_BUG.zh_CN.md](./AUDIT_BUG.zh_CN.md)
-- 严格审计 2026-11-07（Flash + 代码 + **持久化**双槽/墙钟/站事落盘）：[AUDIT_20261107.zh_CN.md](./AUDIT_20261107.zh_CN.md) — 断电相关历史快照
-- **全量严格审计 2026-11-08**（Flash + 代码 + 文案版式；SAVE_VER 13；栈溢出当场修）：[AUDIT_FULL_20261108.zh_CN.md](./AUDIT_FULL_20261108.zh_CN.md) — 本轮全量基线
-- **严格审计 2026-11-08 第二轮**（Flash + 代码 + 文案版式；ABI 无漂移；归档保留规则）：[AUDIT_STRICT_20261108.zh_CN.md](./AUDIT_STRICT_20261108.zh_CN.md) — 现行审计快照
-- **玩法内容审计与优化方案 2026-11-08**（经济数值 / 内容体量 / 交互反馈；P0–P3 分级；文案门禁判 FAIL）：[AUDIT_GAMEPLAY_20261108.zh_CN.md](./AUDIT_GAMEPLAY_20261108.zh_CN.md) — 内容侧行动基线
-- **最终优化方案 2026-11-08**（16 个 P0 + 11 个数值 + 5 个信息 + 7 个进度 + 5 个内容切片；P3 前不动 ABI）：[OPTIMIZE_PLAN_20261108.zh_CN.md](./OPTIMIZE_PLAN_20261108.zh_CN.md) — 实现规格
+- 家园布局锁：[LAYOUT_LOCK.zh_CN.md](./LAYOUT_LOCK.zh_CN.md) · Flash / 体积方案：[FLASH_SIZE_PLAN.zh_CN.md](./FLASH_SIZE_PLAN.zh_CN.md)
+- **审计硬轨**（每次审计必含 Flash 体积 + 整体代码优化 + 玩家文案版式；改后严格审计并当场修）：
+  [AUDIT_REQUIREMENTS.zh_CN.md](./AUDIT_REQUIREMENTS.zh_CN.md) · 项目约定见 [`PROJECT.zh_CN.md`](../../PROJECT.zh_CN.md)
+  · 宿主门禁 `tools/check_ashbox_copy_layout.py`
+- 已归档的审计快照（每次一行）：[AUDIT_HISTORY.zh_CN.md](./AUDIT_HISTORY.zh_CN.md)
+- **当前内容发现与实现规格**：[AUDIT_GAMEPLAY_20261108.zh_CN.md](./AUDIT_GAMEPLAY_20261108.zh_CN.md)
+  · [OPTIMIZE_PLAN_20261108.zh_CN.md](./OPTIMIZE_PLAN_20261108.zh_CN.md)
 
 - 据点枢纽：日勤（醒着可玩）、菜地（两块田地·谷/薯）、仓库可扩容/仓家具、铁棚·渡口交易、线索；选档含猎场（需开闸：打开站门后才能走）
 - 玩家可见规划说明：选路副行写明掉落区间/空手而归概率/稀有与补余烬；人选写明加成；建设底栏与「帮助」可翻阅概率、出处与建设效果

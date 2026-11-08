@@ -7,25 +7,18 @@ Offline post-apocalypse idle game for FoloToy AI Passport.
 - Branch: `feature/ashbox-ember`
 - UI is a new application shell (not the hardware-test demo menu)
 - Rules: `main/ashbox_game.c` + content tables in `main/ashbox_content.c` (host-tested)
-- Save: NVS namespace `ashbox` key `save`, magic `ASH2` / `ASHBOX_SAVE_VER=13` blob 776 (older versions migrate; see [EXTENSION.md](./EXTENSION.md) / [AUDIT.md](./AUDIT.md)); meta progress key `meta` / `ASHM` — [META_PROGRESS.md](./META_PROGRESS.md); project rules in root [`PROJECT.md`](../../PROJECT.md)
+- Save: NVS namespace `ashbox` key `save`, magic `ASH2` / `ASHBOX_SAVE_VER=13` blob 776 (older versions migrate; see [EXTENSION.md](./EXTENSION.md)); meta progress key `meta` / `ASHM` — [META_PROGRESS.md](./META_PROGRESS.md); project rules in root [`PROJECT.md`](../../PROJECT.md)
 - USB save: Settings items Backup / Import implement `!EMBACKUP` for the [AI-Passport_BS save manager](https://github.com/Jiaqingrun/AI-Passport_BS) (current ZIP: `save-manager-v1.0.1`)
 - Next community-update copy checklist (Save Manager URL, `RESTORED 3`, NVS namespace): [COMMUNITY_PUBLISH.md](./COMMUNITY_PUBLISH.md)
 - Flash: default `./tools/flash_ashbox_preserve_save.sh <port>` (app at `0x10000` only); merged `0x0` wipes NVS — blank device or explicit wipe only (see [BUILD.md](./BUILD.md)). **Community install/update must warn that progress is wiped; it is not preserve-save.**
 - Content-fill audit and Phase F / G plan: [CONTENT_FILL.md](./CONTENT_FILL.md)
-- Content audit Phase G (narrative / UX): [AUDIT_CONTENT_G.md](./AUDIT_CONTENT_G.md)
-- Ten-round strict audit (compliance / content / interaction / extension / gameplay / code / power / optimization): [AUDIT_10R.md](./AUDIT_10R.md)
-- Low-level code audit (save ABI / tasks & locks / deep sleep / audio): [AUDIT_CODE.md](./AUDIT_CODE.md)
-- UI / visual / layout / buttons / overlap / fonts triple audit: [AUDIT_UI_VISUAL.md](./AUDIT_UI_VISUAL.md)
-- Home layout lock: [LAYOUT_LOCK.md](./LAYOUT_LOCK.md)
-- Flash / size lossless reduction plan: [FLASH_SIZE_PLAN.md](./FLASH_SIZE_PLAN.md)
-- **Standing audit gate** (every audit must cover Flash size + whole-code optimization + player copy layout; post-change strict audit + fix-forward): [AUDIT_REQUIREMENTS.md](./AUDIT_REQUIREMENTS.md) · project rule in [`PROJECT.md`](../../PROJECT.md) · host gate `tools/check_ashbox_copy_layout.py`
-- Strict audit round 2026-11-06 (Flash + whole-code, mandatory sections PASS): [AUDIT_STRICT.md](./AUDIT_STRICT.md)
-- Strict game-code bug audit 2026-11-07 (Flash + optimization rails; bug verdict FAIL): [AUDIT_BUG.md](./AUDIT_BUG.md)
-- Strict audit 2026-11-07 (Flash + code + **persistence** dual-slot/clock/chore flush): [AUDIT_20261107.md](./AUDIT_20261107.md) — prior persistence snapshot
-- **Full strict audit 2026-11-08** (Flash + code + copy layout; SAVE_VER 13; stack fix-forward): [AUDIT_FULL_20261108.md](./AUDIT_FULL_20261108.md) — full baseline for this round
-- **Strict audit round 2 2026-11-08** (Flash + code + copy layout; ABI unchanged; archive retention): [AUDIT_STRICT_20261108.md](./AUDIT_STRICT_20261108.md) — current standing audit snapshot
-- **Gameplay content audit and optimization plan 2026-11-08** (economy / content volume / feedback; P0–P3 slices; copy gate verdict FAIL): [AUDIT_GAMEPLAY_20261108.md](./AUDIT_GAMEPLAY_20261108.md) — content-side action baseline
-- **Optimization plan 2026-11-08** (16 P0 + 11 balance + 5 info + 7 progression + 5 content slices; no ABI change until P3): [OPTIMIZE_PLAN_20261108.md](./OPTIMIZE_PLAN_20261108.md) — implementation spec
+- Home layout lock: [LAYOUT_LOCK.md](./LAYOUT_LOCK.md) · Flash / size plan: [FLASH_SIZE_PLAN.md](./FLASH_SIZE_PLAN.md)
+- **Standing audit gate** (every audit covers Flash size + whole-code optimization + player copy
+  layout; post-change strict audit with fix-forward): [AUDIT_REQUIREMENTS.md](./AUDIT_REQUIREMENTS.md)
+  · project rule in [`PROJECT.md`](../../PROJECT.md) · host gate `tools/check_ashbox_copy_layout.py`
+- Retired audit snapshots, one row each: [AUDIT_HISTORY.md](./AUDIT_HISTORY.md)
+- **Content findings and implementation spec (current)**: [AUDIT_GAMEPLAY_20261108.md](./AUDIT_GAMEPLAY_20261108.md)
+  · [OPTIMIZE_PLAN_20261108.md](./OPTIMIZE_PLAN_20261108.md)
 
 - Hub: station duty (awake play), farm (two fields · grain/root), stash + furniture, Iron Shed / Ash River trade; hunt needs gate open (unlocks the station door to the hunt path)
 - Player-facing planning copy: route sublines show loot ranges / empty-handed probability / rares / ember catch-up; person rows show biases; build footer + scrollable Help list the rates and sources

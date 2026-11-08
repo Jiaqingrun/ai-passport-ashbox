@@ -12,7 +12,7 @@ Audit date: 2026-11-04 (Asia/Shanghai).
 
 ## 1. Inventory
 
-> **Current inventory (2026-11-06, F0–F5 + Phase G content):** treat code and [AUDIT_CONTENT_G.md](./AUDIT_CONTENT_G.md) as authoritative (37 branches / 13 outcomes / 12 tags / 40 away / idle·lore·twist·watch 20·12·8·≥8; 23 help lines).
+> **Current inventory (2026-11-06, F0–F5 + Phase G content):** treat code and [AUDIT_HISTORY.md](./AUDIT_HISTORY.md) as authoritative (37 branches / 13 outcomes / 12 tags / 40 away / idle·lore·twist·watch 20·12·8·≥8; 23 help lines).
 
 | Category | Count | Location | Notes |
 | --- | --- | --- | --- |
@@ -134,4 +134,4 @@ Recommended: F0→F1→F2; F3–F5 can parallelize copy work.
 
 ## 6. Relation to prior phases
 
-A–E = systems/numbers baseline. **F = content identity and wiring.** **G (content) = narrative/UX continuity** (hub clues, step milestones, watch radio)—not a fourth questline; see [AUDIT_CONTENT_G.md](./AUDIT_CONTENT_G.md).
+A–E = systems/numbers baseline. **F = content identity and wiring.** **G (content) = narrative/UX continuity** (hub clues, step milestones, watch radio)—not a fourth questline; see [AUDIT_HISTORY.md](./AUDIT_HISTORY.md).

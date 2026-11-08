@@ -41,15 +41,6 @@ QR 项目 ID：`ai-passport-ashbox`。现行工作区：`~/DeepSeek/AI Passport/
 
 ---
 
-## 会话阅读顺序
-
-1. 本文件 `PROJECT.md`  
-2. [`AGENTS.md`](./AGENTS.md)（技能安装、烧录政策、UI 重设计禁令）  
-3. [`docs/ashbox/README.md`](./docs/ashbox/README.md) → 任务相关现行文（布局锁 / 延伸 / 构建 / 审计清单）  
-4. 改代码时：邻近头文件与实现；硬件细节以规格与 `bsp_pins.h` 为准，缺则问用户  
-
----
-
 ## 构建 · 测试 · 刷机
 
 | 目的 | 命令 |
@@ -178,32 +169,19 @@ QR 项目 ID：`ai-passport-ashbox`。现行工作区：`~/DeepSeek/AI Passport/
 
 ---
 
-## 审计硬轨（写死 · 每次必做）
+## 审计硬轨（写死）
 
-凡本项目的**审计**（十轮 / 代码 / 内容 / UI / 发布前 / 对话中明确称为审计的任务），交付物**必须**含：
-
-1. **Flash 体积** — 近期 `--firmware` 镜像身份、`app` vs factory 余量、精灵/字库/PCM/代码拆分、对照 `FLASH_SIZE_PLAN`、可做与禁做  
-2. **整体代码优化** — 规则/UI 边界、过大单元、重复、可测未测、锁与任务、存档 ABI、死枝、构建脂肪；每条有证据与可执行下一步  
-3. **玩家文案版式 + 用语表** — 帮助／引导／弹窗必须 WRAP；一名一物；仓位等机制白话算账；宿主门禁 `tools/check_ashbox_copy_layout.py` + `tools/check_ashbox_glossary.py`
-
-缺一则审计未完成。清单：[`docs/ashbox/AUDIT_REQUIREMENTS.md`](./docs/ashbox/AUDIT_REQUIREMENTS.md)。
-
-### 改后严格审计（写死）
-
-凡会话中改了《余烬》产品代码／UI／玩家文案／帮助／设置，交付前 Agent **必须**：
-
-1. 跑 `./tools/validate.sh --ashbox`（含字形、死枝、**文案版式**、精灵、宿主测）  
-2. 按 `AUDIT_REQUIREMENTS` 适用行过一遍（改 UI／文案必查文案版式；重编固件查 Flash；动结构／ABI／热点查代码优化）  
-3. **当场修掉 FAIL** — 禁止把已知换行遮挡、截断或门禁失败留到「下次专门审计」
+每次审计**必须**含三节：**Flash 体积** · **整体代码优化** · **玩家文案版式 + 用语表**，缺一即未完成。
+改过产品代码／UI／文案后，交付前跑 `./tools/validate.sh --ashbox`，按清单过一遍适用行，**当场修掉 FAIL**。
+清单：[`AUDIT_REQUIREMENTS.zh_CN.md`](./docs/ashbox/AUDIT_REQUIREMENTS.zh_CN.md) · 已归档快照：
+[`AUDIT_HISTORY.zh_CN.md`](./docs/ashbox/AUDIT_HISTORY.zh_CN.md)
 
 ---
 
-## 文档治理（本产品树）
+## 文档治理
 
-- 唯一权威索引：`docs/ashbox/README.md`（及 `.zh_CN.md`）  
-- 布局/体积/审计完成态以各自现行文为准，问题清单不得另立「当前进度 ✅」并行真相源  
-- 现行 Markdown：**英文默认路径 + 简体中文 `.zh_CN.md` 配对**，互链保持同步  
-- 过时里程碑进 `docs/archive/`（或等价），正文标明历史归档  
+唯一权威索引 `docs/ashbox/README.md`（`.zh_CN.md` 配对）；问题清单不得另立并行「当前进度」真相源。
+英文默认路径 + 简体中文配对、互链同步；过时里程碑进 `docs/archive/` 并标明归档。
 
 ---
 

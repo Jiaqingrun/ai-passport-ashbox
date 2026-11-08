@@ -54,6 +54,6 @@ Audit mandatory: Copy layout = PASS|FAIL|DEFERRED(reason)
 ## Related
 
 - Size plan: [`FLASH_SIZE_PLAN.md`](./FLASH_SIZE_PLAN.md)
-- Ten-round audit: [`AUDIT_10R.md`](./AUDIT_10R.md)
-- Low-level code: [`AUDIT_CODE.md`](./AUDIT_CODE.md)
+- Retired snapshots: [AUDIT_HISTORY.md](./AUDIT_HISTORY.md)
+- Current findings: [AUDIT_GAMEPLAY_20261108.md](./AUDIT_GAMEPLAY_20261108.md)
 - Product index: [`README.md`](./README.md)

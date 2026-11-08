@@ -10,7 +10,7 @@
 
 ## 1. 内容存量盘点
 
-> **现行库存（2026-11-06，F0–F5 + Phase G 内容）：** 以代码与 [AUDIT_CONTENT_G.zh_CN.md](./AUDIT_CONTENT_G.zh_CN.md) 为准。
+> **现行库存（2026-11-06，F0–F5 + Phase G 内容）：** 以代码与 [AUDIT_HISTORY.zh_CN.md](./AUDIT_HISTORY.zh_CN.md) 为准。
 
 | 类别 | 数量 | 位置 | 备注 |
 | --- | --- | --- | --- |
@@ -144,7 +144,7 @@
 | G4 | N03 | 了结后守望句池 |
 | G5–G9 | N04–N09 | 战报连续、灰潮教程、帮助、站事/危机 |
 
-细则与关闭表：[AUDIT_CONTENT_G.zh_CN.md](./AUDIT_CONTENT_G.zh_CN.md)。  
+细则与关闭表：[AUDIT_HISTORY.zh_CN.md](./AUDIT_HISTORY.zh_CN.md)。  
 **落地状态（2026-11-06）：** G1–G9 已合入；`./tools/validate.sh --static` PASS；真机 G1/G2/G4 抽验待连线。**仍不做**第四调查线 / 新存档 quest 字段。
 
 ---

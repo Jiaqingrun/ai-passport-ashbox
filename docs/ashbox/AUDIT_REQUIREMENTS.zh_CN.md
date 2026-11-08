@@ -54,6 +54,6 @@
 ## 相关
 
 - 体积方案：[FLASH_SIZE_PLAN.zh_CN.md](./FLASH_SIZE_PLAN.zh_CN.md)
-- 十轮审计：[AUDIT_10R.zh_CN.md](./AUDIT_10R.zh_CN.md)
-- 底层代码：[AUDIT_CODE.zh_CN.md](./AUDIT_CODE.zh_CN.md)
+- 已归档快照：[AUDIT_HISTORY.zh_CN.md](./AUDIT_HISTORY.zh_CN.md)
+- 当前发现：[AUDIT_GAMEPLAY_20261108.zh_CN.md](./AUDIT_GAMEPLAY_20261108.zh_CN.md)
 - 产品索引：[README.zh_CN.md](./README.zh_CN.md)

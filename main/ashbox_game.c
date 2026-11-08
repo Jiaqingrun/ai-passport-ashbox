@@ -214,6 +214,13 @@ void ash_game_after_migrate(ash_game_t *g)
     for (int qi = 0; qi < ASHBOX_QUEST_N; qi++) {
         if (g->quest_beat_day[qi] == 0) g->quest_beat_day[qi] = ASHBOX_DAY_LATCH_NEVER;
     }
+    /* 旧档重伤计时曾是约10分钟自愈(600s)；现改为24小时用药窗口，到期死亡 */
+    for (int i = 0; i < g->pop && i < ASHBOX_PERSON_MAX; i++) {
+        ash_person_t *p = ash_game_person_mut(g, (unsigned)i);
+        if (!p || p->state != ASH_PERSON_INJURED) continue;
+        if (p->injure_remain_s == 0 || p->injure_remain_s <= 600u)
+            p->injure_remain_s = ASHBOX_INJURE_DEAD_S;
+    }
     clamp_economy(g);
     sync_quest2_catchup(g);
     (void)ash_game_try_clear(g);
@@ -2151,14 +2158,14 @@ static void resolve_return(ash_game_t *g, bool success)
         } else {
             bool got_fever = false;
             if (pid < g->pop) {
-                /* 空手而归存活：约 35% 染上热伤（36h 转虚弱；抗生素立刻好），其余重伤计时自愈 */
+                /* 空手而归存活：约 35% 热伤(36h 自退)；其余重伤，24h 内须肾上腺素否则死亡 */
                 if (((seed / 3u) % 100u) < 35u) {
                     (*ash_game_person_mut(g, (unsigned)(pid))).state = ASH_PERSON_INFECTED;
                     (*ash_game_person_mut(g, (unsigned)(pid))).injure_remain_s = ASHBOX_INFECT_HEAL_S;
                     got_fever = true;
                 } else {
                     (*ash_game_person_mut(g, (unsigned)(pid))).state = ASH_PERSON_INJURED;
-                    (*ash_game_person_mut(g, (unsigned)(pid))).injure_remain_s = 600;
+                    (*ash_game_person_mut(g, (unsigned)(pid))).injure_remain_s = ASHBOX_INJURE_DEAD_S;
                 }
             }
             {
@@ -2171,10 +2178,10 @@ static void resolve_return(ash_game_t *g, bool success)
                 } else {
                     snprintf(buf, sizeof(buf), "%s只摸到空壳", k_place[tier]);
                     set_line(r, 1, buf);
-                    if (pid == 0) set_line(r, 2, "阿禾喘着 · 先养伤");
-                    else if (pid == 1) set_line(r, 2, "老阙零件盒掉了");
-                    else if (pid == 2) set_line(r, 2, "小芒线索丢半路");
-                    else set_line(r, 2, "受伤休整中");
+                    if (pid == 0) set_line(r, 2, "阿禾喘着 · 一日内要用药");
+                    else if (pid == 1) set_line(r, 2, "老阙喘着 · 一日内要用药");
+                    else if (pid == 2) set_line(r, 2, "小芒喘着 · 一日内要用药");
+                    else set_line(r, 2, "重伤 · 一日内要用药");
                 }
             }
             /* Return surviving carry (ammo may be spent). */
@@ -2192,13 +2199,13 @@ static void resolve_return(ash_game_t *g, bool success)
                 else if (pid == 2) ash_game_log(g, "小芒空手而归还带热伤");
                 else ash_game_log(g, "空手而归 · 还带了热伤");
             } else if (pid == 0) {
-                ash_game_log(g, "阿禾空手而归还受了伤 · 先养伤");
+                ash_game_log(g, "阿禾重伤 · 一日内要用药");
             } else if (pid == 1) {
-                ash_game_log(g, "老阙空手而归 · 零件盒掉了");
+                ash_game_log(g, "老阙重伤 · 一日内要用药");
             } else if (pid == 2) {
-                ash_game_log(g, "小芒空手而归 · 线索丢了");
+                ash_game_log(g, "小芒重伤 · 一日内要用药");
             } else {
-                ash_game_log(g, "出门空手而归 · 有人受了伤");
+                ash_game_log(g, "有人重伤 · 一日内要用药");
             }
         }
         {
@@ -2406,26 +2413,41 @@ static void apply_economy(ash_game_t *g, int64_t dt_s, int sleep_num, int sleep_
 
 static void tick_injure(ash_game_t *g, int64_t dt_s)
 {
-    for (int i = 0; i < g->pop && i < ASHBOX_PERSON_MAX; i++) {
-        ash_person_state_t st = (*ash_game_person_mut(g, (unsigned)(i))).state;
-        if (st != ASH_PERSON_INJURED && st != ASH_PERSON_INFECTED) continue;
-        if ((*ash_game_person_mut(g, (unsigned)(i))).injure_remain_s == 0) {
-            /* 旧档热伤无计时：补上 36h 窗口 */
-            if (st == ASH_PERSON_INFECTED) (*ash_game_person_mut(g, (unsigned)(i))).injure_remain_s = ASHBOX_INFECT_HEAL_S;
-            else continue;
+    for (int i = 0; i < g->pop && i < ASHBOX_PERSON_MAX;) {
+        ash_person_t *p = ash_game_person_mut(g, (unsigned)i);
+        if (!p) {
+            i++;
+            continue;
         }
-        if ((*ash_game_person_mut(g, (unsigned)(i))).injure_remain_s > (uint32_t)dt_s) {
-            (*ash_game_person_mut(g, (unsigned)(i))).injure_remain_s -= (uint32_t)dt_s;
+        ash_person_state_t st = p->state;
+        if (st != ASH_PERSON_INJURED && st != ASH_PERSON_INFECTED) {
+            i++;
+            continue;
+        }
+        if (p->injure_remain_s == 0) {
+            /* 旧档无计时：热伤补 36h 自退；重伤补 24h 用药窗口 */
+            if (st == ASH_PERSON_INFECTED) p->injure_remain_s = ASHBOX_INFECT_HEAL_S;
+            else p->injure_remain_s = ASHBOX_INJURE_DEAD_S;
+        }
+        if (p->injure_remain_s > (uint32_t)dt_s) {
+            p->injure_remain_s -= (uint32_t)dt_s;
+            i++;
+            continue;
+        }
+        p->injure_remain_s = 0;
+        if (st == ASH_PERSON_INFECTED) {
+            /* 无抗生素也会退：健康但累，避免永久减员 */
+            p->state = ASH_PERSON_HEALTHY;
+            if (p->fatigue < 60) p->fatigue = 60;
+            ash_game_log(g, "热伤退了 · 还累着");
+            i++;
         } else {
-            (*ash_game_person_mut(g, (unsigned)(i))).injure_remain_s = 0;
-            if (st == ASH_PERSON_INFECTED) {
-                /* 无抗生素也会退：健康但累，避免永久减员 */
-                (*ash_game_person_mut(g, (unsigned)(i))).state = ASH_PERSON_HEALTHY;
-                if ((*ash_game_person_mut(g, (unsigned)(i))).fatigue < 60) (*ash_game_person_mut(g, (unsigned)(i))).fatigue = 60;
-                ash_game_log(g, "热伤退了 · 还累着");
-            } else {
-                (*ash_game_person_mut(g, (unsigned)(i))).state = ASH_PERSON_HEALTHY;
-            }
+            /* 重伤满一日未用药 → 死亡 */
+            char buf[ASHBOX_JOURNAL_LEN];
+            snprintf(buf, sizeof(buf), "%s重伤一日未用药 · 没了", ash_game_person_name((uint8_t)i));
+            ash_game_log(g, buf);
+            remove_person_at(g, (uint8_t)i);
+            /* 下标前移，勿 i++ */
         }
     }
 }

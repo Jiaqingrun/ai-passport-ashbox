@@ -467,7 +467,7 @@ static void test_med_use_and_stim_trade(void)
     assert(g.med_milk == 0);
 
     g.person[0].state = ASH_PERSON_INJURED;
-    g.person[0].injure_remain_s = 600;
+    g.person[0].injure_remain_s = ASHBOX_INJURE_DEAD_S;
     g.med_stim = 1;
     assert(ash_game_use_stim(&g, 0));
     assert(g.person[0].state == ASH_PERSON_HEALTHY);
@@ -1836,6 +1836,38 @@ static void test_gameplay_retune_economy(void)
     settle_s(&g, 1);
     assert(g.person[0].state == ASH_PERSON_HEALTHY);
     assert(g.person[0].fatigue >= 60);
+
+    /* Heavy wound: 24h untreated → death; stim within window saves. */
+    new_game(&g);
+    g.pop = 2;
+    g.person[1] = g.person[0];
+    g.person[1].id = 1;
+    g.person[0].state = ASH_PERSON_INJURED;
+    g.person[0].injure_remain_s = ASHBOX_INJURE_DEAD_S;
+    g.food = 40;
+    g.water = 40;
+    settle_s(&g, (int64_t)ASHBOX_INJURE_DEAD_S - 1);
+    assert(g.pop == 2);
+    assert(g.person[0].state == ASH_PERSON_INJURED);
+    settle_s(&g, 1);
+    assert(g.pop == 1);
+    assert(g.person[0].id == 0); /* survivor slid to slot 0 */
+
+    new_game(&g);
+    g.person[0].state = ASH_PERSON_INJURED;
+    g.person[0].injure_remain_s = ASHBOX_INJURE_DEAD_S;
+    g.med_stim = 1;
+    assert(ash_game_use_stim(&g, 0));
+    settle_s(&g, (int64_t)ASHBOX_INJURE_DEAD_S);
+    assert(g.pop == 1);
+    assert(g.person[0].state == ASH_PERSON_HEALTHY);
+
+    /* Legacy 600s injure timer migrates to full-day window. */
+    new_game(&g);
+    g.person[0].state = ASH_PERSON_INJURED;
+    g.person[0].injure_remain_s = 600;
+    ash_game_after_migrate(&g);
+    assert(g.person[0].injure_remain_s == ASHBOX_INJURE_DEAD_S);
 
     /* Stove lining + box lamp sinks; dorm L3 consume matches L2. */
     new_game(&g);

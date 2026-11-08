@@ -1,7 +1,7 @@
 #pragma once
 
 /** Help list (怎么玩). Count matches the compiled string table. */
-#define ASHBOX_HELP_COUNT 93
+#define ASHBOX_HELP_COUNT 94
 /** Visible wrapped rows in the help viewport (taller rows; must fit LIST_LAYER_H=228). */
 #define ASHBOX_HELP_VIEW 3
 /** Help row card height (px); fits ~4 wrapped lines of ashbox_font_16. */

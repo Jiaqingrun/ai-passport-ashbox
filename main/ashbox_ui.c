@@ -128,6 +128,7 @@ static lv_obj_t *s_modal_lines[5];
 static lv_obj_t *s_modal_btn;
 static bool s_block_modal;
 static bool s_wanderer_bell_armed;
+static bool s_wanderer_join_modal; /* 留下前确认：展示本事与加成 */
 static bool s_exile_confirm;
 static lv_obj_t *s_home_layer;
 static lv_obj_t *s_list_layer;
@@ -209,6 +210,7 @@ static void paint_achieve(void);
 static void paint_restart_confirm(void);
 static void paint_settings(void);
 static void set_card_sub_tip(const char *tip);
+static void set_home_hint(const char *base);
 
 void ashbox_ui_arm_ok_guard_ms(int ms)
 {
@@ -493,6 +495,41 @@ static void set_modal_visible(bool on)
         if (s_hint) lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
         s_block_modal = false;
     }
+}
+
+static void paint_wanderer_join_modal(void)
+{
+    if (!s_g || !ash_game_wanderer_pending(s_g)) {
+        s_wanderer_join_modal = false;
+        return;
+    }
+    uint8_t trait = ash_game_wanderer_trait(s_g);
+    char body[168];
+    snprintf(body, sizeof(body), "%s\n本事：%s\n%s", ash_game_wanderer_name(s_g),
+             ash_game_work_trait_name(trait), ash_game_work_trait_hint(trait));
+    set_modal_visible(true);
+    lv_label_set_text(s_modal_lines[0], "确认留下");
+    lv_label_set_text(s_modal_lines[1], body);
+    lv_label_set_text(s_modal_lines[2], "耗20口粮+10水");
+    lv_label_set_text(s_modal_lines[3], "进站信任0 · 疲劳20");
+    lv_label_set_text(s_modal_lines[4], "上下选 · 确定键确认");
+    if (s_modal_btn) {
+        lv_obj_clear_flag(s_modal_btn, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(lv_obj_get_child(s_modal_btn, 0),
+                          s_focus == 0 ? "确定留下" : "再想想");
+    }
+    set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "确定留下", true, s_focus == 0);
+    set_btn(s_btn_sec, lv_obj_get_child(s_btn_sec, 0), "再想想", true, s_focus == 1);
+    set_home_hint("先看本事加成 · 再决定留下");
+    s_block_modal = true;
+    s_wanderer_join_modal = true;
+}
+
+static void close_wanderer_join_modal(void)
+{
+    s_wanderer_join_modal = false;
+    s_block_modal = false;
+    set_modal_visible(false);
 }
 
 static void show_block_modal(ash_act_t act)
@@ -1022,6 +1059,9 @@ static void paint_home(void)
     apply_sprite(home_scene_now(), false);
 
     set_modal_visible(false);
+    if (s_wanderer_join_modal && !ash_game_wanderer_pending(s_g)) {
+        close_wanderer_join_modal();
+    }
 
     set_bar_dual(true);
     /* 过路客申请挡在最前：不点留下/拒绝就不让开抉择、站事、出发 */
@@ -1035,10 +1075,10 @@ static void paint_home(void)
         label_set_if(s_card_value, ash_game_wanderer_name(s_g));
         s_exp_rem_shown = UINT32_MAX;
         {
-            char tip[72];
+            char tip[48];
             const char *block = ash_game_wanderer_join_block_reason(s_g);
             if (ash_game_wanderer_can_join(s_g)) {
-                snprintf(tip, sizeof(tip), "%s · 耗20口粮+10水",
+                snprintf(tip, sizeof(tip), "%s ·点留下看加成",
                          ash_game_work_trait_name(ash_game_wanderer_trait(s_g)));
             } else {
                 snprintf(tip, sizeof(tip), "%s · %s",
@@ -1047,9 +1087,13 @@ static void paint_home(void)
             }
             set_card_sub_tip(tip);
         }
-        set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "留下", true, s_focus == 0);
-        set_btn(s_btn_sec, lv_obj_get_child(s_btn_sec, 0), "打发", true, s_focus == 1);
-        set_home_hint("必须先选留下或打发");
+        if (s_wanderer_join_modal) {
+            paint_wanderer_join_modal();
+        } else {
+            set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "留下", true, s_focus == 0);
+            set_btn(s_btn_sec, lv_obj_get_child(s_btn_sec, 0), "打发", true, s_focus == 1);
+            set_home_hint("留下会先弹出本事与加成");
+        }
     } else if (ash_game_crisis_pending(s_g)) {
         s_wanderer_bell_armed = false;
         label_set_if(s_card_title, "站内危机");
@@ -1484,8 +1528,11 @@ static void paint_survivor_detail(void)
         if (i >= n) break;
         if (i == 0) {
             snprintf(line, sizeof(line), "状态  %s", ash_game_person_state_label(p->state));
-            if (p->injure_remain_s > 0)
-                snprintf(sub, sizeof(sub), "  受伤约剩%u时  ·  ",
+            if (p->state == ASH_PERSON_INJURED && p->injure_remain_s > 0)
+                snprintf(sub, sizeof(sub), "  重伤约剩%u时 ·要用药  ·  ",
+                         (unsigned)((p->injure_remain_s + 3599u) / 3600u));
+            else if (p->injure_remain_s > 0)
+                snprintf(sub, sizeof(sub), "  热伤约剩%u时  ·  ",
                          (unsigned)((p->injure_remain_s + 3599u) / 3600u));
             else
                 snprintf(sub, sizeof(sub), "  疲劳%u  ·  ", (unsigned)p->fatigue);
@@ -2056,7 +2103,7 @@ static void paint_res(void)
                 enough = s_g->med_milk > 0 && (*ash_game_person_mut(s_g, (unsigned)(pid))).state != ASH_PERSON_AWAY;
             } else if (mid == 1) {
                 snprintf(line, sizeof(line), "%s·%s", who, ash_content_med_name_stim());
-                snprintf(sub, sizeof(sub), "  剩%u ·压重伤 ·%s  ·  ", (unsigned)s_g->med_stim, st);
+                snprintf(sub, sizeof(sub), "  剩%u ·一日内压重伤 ·%s  ·  ", (unsigned)s_g->med_stim, st);
                 enough = s_g->med_stim > 0 && (*ash_game_person_mut(s_g, (unsigned)(pid))).state == ASH_PERSON_INJURED;
             } else {
                 snprintf(line, sizeof(line), "%s·%s", who, ash_content_med_name_abx());
@@ -3306,14 +3353,26 @@ static void activate_home(void)
     }
     if (s_focus == 0) {
         if (ash_game_wanderer_pending(s_g)) {
-            /* 主按钮=留下；条件不够只警告，弹窗不关 */
-            bool ok = ash_game_wanderer_join(s_g);
-            ashbox_sfx_play(ok ? ASH_SFX_REWARD : ASH_SFX_WARN);
-            if (ok) {
-                s_wanderer_bell_armed = false;
-                mark_save_urgent();
+            /* 主按钮=留下：先弹窗看本事/加成，再确认 */
+            if (!ash_game_wanderer_can_join(s_g)) {
+                const char *block = ash_game_wanderer_join_block_reason(s_g);
+                set_modal_visible(true);
+                lv_label_set_text(s_modal_lines[0], "现在留不下");
+                lv_label_set_text(s_modal_lines[1], block && block[0] ? block : "床或口粮水不够");
+                lv_label_set_text(s_modal_lines[2], ash_game_work_trait_name(ash_game_wanderer_trait(s_g)));
+                lv_label_set_text(s_modal_lines[3], ash_game_work_trait_hint(ash_game_wanderer_trait(s_g)));
+                lv_label_set_text(s_modal_lines[4], "按确定关闭");
+                if (s_modal_btn) {
+                    lv_obj_clear_flag(s_modal_btn, LV_OBJ_FLAG_HIDDEN);
+                    lv_label_set_text(lv_obj_get_child(s_modal_btn, 0), "知道了");
+                }
+                s_block_modal = true;
+                ashbox_sfx_play(ASH_SFX_WARN);
+                return;
             }
-            paint_home();
+            s_focus = 0;
+            ashbox_sfx_play(ASH_SFX_CONFIRM);
+            paint_wanderer_join_modal();
             return;
         }
         if (ash_game_crisis_pending(s_g)) {
@@ -4258,6 +4317,12 @@ void ashbox_ui_on_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 
     /* 上下：用 PRESS 即时响应。主页另支持长按在「当前可看场景」间切换。 */
     if (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) {
+        if (s_wanderer_join_modal && ev == BSP_BTN_PRESS) {
+            s_focus = wrap(s_focus, 2, (btn == BSP_BTN_DOWN) ? 1 : -1);
+            ashbox_sfx_play(ASH_SFX_MOVE);
+            paint_wanderer_join_modal();
+            goto key_out;
+        }
         /* B17: 块模态打开时勿改背后列表焦点 */
         if (!s_block_modal && ev == BSP_BTN_PRESS) {
             if (s_page == UI_HOME) s_nav_focus_snap = s_focus;
@@ -4274,6 +4339,10 @@ void ashbox_ui_on_key(bsp_btn_t btn, bsp_btn_ev_t ev)
     }
 
     if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
+        if (s_wanderer_join_modal) {
+            /* 确认层打开时不睡 */
+            goto key_out;
+        }
         if (s_page == UI_HOME) {
             if (guide_active()) {
                 skip_guide();
@@ -4301,6 +4370,25 @@ void ashbox_ui_on_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         goto key_out;
     }
 
+    if (s_wanderer_join_modal) {
+        if (s_focus == 0) {
+            bool ok = ash_game_wanderer_join(s_g);
+            ashbox_sfx_play(ok ? ASH_SFX_REWARD : ASH_SFX_WARN);
+            close_wanderer_join_modal();
+            if (ok) {
+                s_wanderer_bell_armed = false;
+                mark_save_urgent();
+            }
+            s_focus = 0;
+            paint_home();
+        } else {
+            ashbox_sfx_play(ASH_SFX_BACK);
+            close_wanderer_join_modal();
+            s_focus = 0;
+            paint_home();
+        }
+        goto key_out;
+    }
     if (s_block_modal) {
         set_modal_visible(false);
         ashbox_sfx_play(ASH_SFX_CLICK);

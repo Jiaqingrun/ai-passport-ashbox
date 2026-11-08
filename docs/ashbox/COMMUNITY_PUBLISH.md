@@ -13,7 +13,7 @@ From the **Ember 1.7** submission onward, store **description** and **instructio
 - **Required blocks** (Save Manager link, community wipe, import / `RESTORED 3`, etc.) change only when facts change; otherwise keep them as-is.
 - **Exception:** a full rewrite is allowed only when the creator explicitly asks for one in that session; otherwise agents and the publish flow stay incremental.
 
-In-game Help (“怎么玩”) still updates with rule changes (see `PROJECT.md`); that is separate from this store-side “no major rewrite” rule.
+In-game Help (“How to play”) still updates with rule changes (see `PROJECT.md`); that is separate from this store-side “no major rewrite” rule.
 
 ## Save Manager link (required)
 

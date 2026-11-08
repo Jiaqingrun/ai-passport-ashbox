@@ -15,8 +15,12 @@ typedef struct {
     const char *log;
 } ash_branch_def_t;
 
+/* Candidate pool per tag: the save still stores three chosen ids, but the tag
+ * offers five so the filter can pick a state-dependent three. */
+#define ASHBOX_TAG_POOL_MAX 5
+
 typedef struct {
-    uint8_t branch_ids[ASHBOX_BRANCH_MAX];
+    uint8_t branch_ids[ASHBOX_TAG_POOL_MAX];
     uint8_t branch_count;
 } ash_outcome_def_t;
 
@@ -24,6 +28,8 @@ const ash_branch_def_t *ash_content_branch(uint8_t id);
 unsigned ash_content_branch_count(void);
 /* Short effect line for UI, e.g. "信任+1 · 威胁-2" */
 void ash_content_branch_effect(uint8_t id, char *out, size_t out_n);
+/** Pool capacity per tag (candidate ids, before filtering). */
+unsigned ash_content_tag_pool_max(void);
 const ash_outcome_def_t *ash_content_outcome(uint8_t id);
 unsigned ash_content_outcome_count(void);
 const char *ash_content_away_line(unsigned idx);

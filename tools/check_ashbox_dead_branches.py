@@ -22,7 +22,8 @@ BRANCH_RE = re.compile(
     re.MULTILINE,
 )
 OUTCOME_RE = re.compile(r"/\*[^*]*\*/\s*\{\{(\d+),\s*(\d+),\s*(\d+)\},\s*(\d+)\}")
-TAG_RE = re.compile(r'\{"[^"]+",\s*\{(\d+),\s*(\d+),\s*(\d+)\},\s*(\d+)\}')
+# Tag pools carry a variable number of candidate ids (5 since C-1).
+TAG_RE = re.compile(r'\{"[^"]+",\s*\{([\d,\s]+)\},\s*(\d+)\}')
 
 
 def main() -> int:
@@ -53,9 +54,9 @@ def main() -> int:
         add_ids(ids, "outcome")
 
     for m in TAG_RE.finditer(text):
-        n = int(m.group(4))
-        ids = [int(m.group(1)), int(m.group(2)), int(m.group(3))][:n]
-        add_ids(ids, "tag")
+        n = int(m.group(2))
+        ids = [int(x) for x in m.group(1).replace(" ", "").split(",") if x]
+        add_ids(ids[:n], "tag")
 
     dead: list[int] = []
     for bid, (qid, _need) in sorted(branches.items()):

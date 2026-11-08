@@ -19,7 +19,7 @@ static const uint8_t k_beds[6] = {0, 2, 3, 4, 5, 6};
 static const uint16_t k_food_cap[6] = {0, 50, 100, 150, 200, 260};
 /* 仓库独立档：低于口袋顶，逼出「扩仓」决策（放置三瓶颈） */
 static const uint16_t k_stash_cap[6] = {0, 40, 100, 180, 240, 300};
-static const uint16_t k_upgrade_cost[5] = {8, 20, 45, 70, 100};
+static const uint16_t k_upgrade_cost[5] = {8, 24, 60, 100, 100};
 static const uint16_t k_stash_upgrade_cost[3] = {10, 24, 0};
 static const uint16_t k_furn_upgrade_cost[2] = {15, 22};
 static const uint16_t k_gear_ember_cost[2] = {3, 5};
@@ -46,12 +46,14 @@ static const char *k_loot_hint[ASH_TIER_COUNT] = {
 #define FARM_GROW_GRAIN_S_LEGACY 14400u
 #define FARM_GROW_ROOT_S_LEGACY 21600u
 #define FARM_GROW_GRAIN_S 86400u
-#define FARM_GROW_ROOT_S 259200u
+#define FARM_GROW_ROOT_S 172800u
 #define STASH_STEP 5u
 #define FURN_SHELF_BONUS 20
 
 static void sync_quest2_catchup(ash_game_t *g);
 static unsigned ember_pity_need(ash_tier_t tier);
+uint32_t ash_game_roll_seed(const ash_game_t *g, unsigned salt);
+static int64_t local_day_index(int64_t unix_s);
 static void add_fatigue(ash_person_t *p, int delta);
 
 static uint16_t day_latch_today(const ash_game_t *g)
@@ -803,6 +805,35 @@ static void add_water_with_overflow(ash_game_t *g, int add)
     g->water = (uint16_t)w;
 }
 
+static uint16_t water_rate_for_lv(uint8_t lv)
+{
+    if (lv == ASHBOX_WELL_LV_WELL) return ASHBOX_WELL_WATER_PER_H;
+    if (lv == ASHBOX_WELL_LV_PIT) return ASHBOX_PIT_WATER_PER_H;
+    return 0;
+}
+
+static uint16_t water_day_cap_for_lv(uint8_t lv)
+{
+    if (lv == ASHBOX_WELL_LV_WELL) return ASHBOX_WELL_WATER_DAY_CAP;
+    if (lv == ASHBOX_WELL_LV_PIT) return ASHBOX_PIT_WATER_DAY_CAP;
+    return 0;
+}
+
+/* Credit the whole hours already elapsed today when a source starts (or comes
+ * back from an upgrade), so a mid-day build is not paid for hours it did not
+ * exist. Without this the clock-derived counter would grant retroactive water. */
+static void seed_water_made_today(ash_game_t *g)
+{
+    g->water_made_today = 0;
+    if (!g || g->last_settle_unix <= 0) return;
+    uint16_t rate = water_rate_for_lv(g->well_lv);
+    if (rate == 0) return;
+    int64_t made = (int64_t)rate * (g->last_settle_unix % 86400) / 3600;
+    int64_t cap = (int64_t)water_day_cap_for_lv(g->well_lv);
+    if (made > cap) made = cap;
+    g->water_made_today = (uint16_t)made;
+}
+
 static void tick_water_economy(ash_game_t *g, int64_t dt_s, int sleep_num, int sleep_den)
 {
     if (!g || dt_s <= 0) return;
@@ -815,10 +846,11 @@ static void tick_water_economy(ash_game_t *g, int64_t dt_s, int sleep_num, int s
             g->well_upgrade_remain_s = 0;
             g->well_lv = ASHBOX_WELL_LV_WELL;
             g->crew_exhaust_remain_s = 0;
+            seed_water_made_today(g);
             for (int i = 0; i < g->pop && i < ASHBOX_PERSON_MAX; i++) {
                 add_fatigue(&(*ash_game_person_mut(g, (unsigned)(i))), (int)ASHBOX_WELL_DONE_FATIGUE);
             }
-            ash_game_log(g, "水井完工了 · 大家累一阵还能出门");
+            ash_game_log(g, "水井完工 · 大家累一阵");
         } else {
             g->well_upgrade_remain_s -= (uint32_t)dt_s;
         }
@@ -868,36 +900,25 @@ static void tick_water_economy(ash_game_t *g, int64_t dt_s, int sleep_num, int s
         }
     }
 
-    /* Produce from pit/well (paused while upgrading); respect per-UTC-day cap. */
-    if (g->well_upgrade_remain_s == 0 &&
-        (g->well_lv == ASHBOX_WELL_LV_PIT || g->well_lv == ASHBOX_WELL_LV_WELL)) {
-        uint16_t rate = (g->well_lv == ASHBOX_WELL_LV_WELL) ? ASHBOX_WELL_WATER_PER_H
-                                                            : ASHBOX_PIT_WATER_PER_H;
-        uint16_t day_cap = (g->well_lv == ASHBOX_WELL_LV_WELL) ? ASHBOX_WELL_WATER_DAY_CAP
-                                                               : ASHBOX_PIT_WATER_DAY_CAP;
-        int64_t left = dt_s;
-        int64_t t = g->last_settle_unix;
-        while (left > 0) {
-            int64_t into = 86400 - (t % 86400);
-            if (into <= 0) into = 86400;
-            if (into > left) into = left;
-            /* New UTC day fragment starts: refresh daily counter. */
-            if (t % 86400 == 0 && t != g->last_settle_unix) g->water_made_today = 0;
-            int64_t made = (int64_t)rate * into / 3600;
-            if (made > 0) {
-                uint16_t room = (g->water_made_today >= day_cap)
-                                    ? 0
-                                    : (uint16_t)(day_cap - g->water_made_today);
-                if (made > room) made = room;
-                if (made > 0) {
-                    g->water_made_today =
-                        (uint16_t)(g->water_made_today + (uint16_t)made);
+    /* Produce from pit/well (paused while upgrading). The counter is the whole
+     * hours elapsed since UTC midnight, so a 1 s awake tick still earns its share
+     * instead of flooring to zero, and the per-day cap stays exact. */
+    if (g->well_upgrade_remain_s == 0) {
+        uint16_t rate = water_rate_for_lv(g->well_lv);
+        if (rate > 0) {
+            uint16_t day_cap = water_day_cap_for_lv(g->well_lv);
+            int64_t end = g->last_settle_unix + dt_s;
+            if (end > 0) {
+                int64_t start_sec = g->last_settle_unix > 0 ? (g->last_settle_unix % 86400) : 0;
+                if ((end % 86400) < start_sec) g->water_made_today = 0; /* UTC midnight */
+                int64_t expected = (int64_t)rate * (end % 86400) / 3600;
+                if (expected > (int64_t)day_cap) expected = (int64_t)day_cap;
+                if (expected > (int64_t)g->water_made_today) {
+                    int64_t made = expected - (int64_t)g->water_made_today;
+                    g->water_made_today = (uint16_t)expected;
                     add_water_with_overflow(g, (int)made);
                 }
             }
-            t += into;
-            left -= into;
-            if (left > 0) g->water_made_today = 0; /* crossing into next day */
         }
     }
 }
@@ -911,7 +932,8 @@ bool ash_game_build_pit(ash_game_t *g)
     if (g->parts < cost) return false;
     g->parts = (uint16_t)(g->parts - cost);
     g->well_lv = ASHBOX_WELL_LV_PIT;
-    ash_game_log(g, "挖好了深坑 · 开始往下渗水");
+    seed_water_made_today(g);
+    ash_game_log(g, "深坑挖好 · 开始渗水");
     clamp_economy(g);
     g->crc = ash_game_crc(g);
     return true;
@@ -928,7 +950,7 @@ bool ash_game_start_well_upgrade(ash_game_t *g)
     if (g->parts < cost) return false;
     g->parts = (uint16_t)(g->parts - cost);
     g->well_upgrade_remain_s = ASHBOX_WELL_UPGRADE_S;
-    ash_game_log(g, "开始升井 · 这口井停产一天");
+    ash_game_log(g, "开始升井 · 井停产一天");
     clamp_economy(g);
     g->crc = ash_game_crc(g);
     return true;
@@ -1523,7 +1545,7 @@ void ash_game_log(ash_game_t *g, const char *line)
 {
     if (!g || !line) return;
     char *slot = g->journal[g->journal_head % ASHBOX_JOURNAL_N];
-    snprintf(slot, ASHBOX_JOURNAL_LEN, "%s", line);
+    ash_copy_utf8(slot, ASHBOX_JOURNAL_LEN, line);
     g->journal_head = (uint8_t)((g->journal_head + 1u) % ASHBOX_JOURNAL_N);
     if (g->journal_count < ASHBOX_JOURNAL_N) g->journal_count++;
 }
@@ -1535,10 +1557,10 @@ static void finish_quest(ash_game_t *g, uint8_t qid)
     quest_set_done(g, qid, 1);
     if (qid == 0) {
         g->threat_rise_num = 7;
-        ash_game_log(g, "铁皮来客了结 · 威胁涨得慢了");
+        ash_game_log(g, "铁皮来客了结 · 威胁更慢");
     } else if (qid == 1) {
         g->deep_loot_bonus = 1;
-        ash_game_log(g, "余烬低语了结 · 深处口粮约多一成");
+        ash_game_log(g, "余烬低语了结 · 深处多粮");
     } else if (qid == 2) {
         g->item[ASH_ITEM_TOKEN] = sat_add_u8(g->item[ASH_ITEM_TOKEN], 1, ASHBOX_ITEM_CAP);
         if (g->lore_shards < 4) g->lore_shards = 4;
@@ -1552,7 +1574,7 @@ static void finish_quest(ash_game_t *g, uint8_t qid)
         if (!(g->world_flags & ASH_WORLD_CAMP2)) {
             g->world_flags |= (uint8_t)ASH_WORLD_CAMP2;
             g->seed_root = sat_add_u8(g->seed_root, 1, ASHBOX_SEED_ROOT_CAP);
-            ash_game_log(g, "渡口通联 · 可种更饱的红薯");
+            ash_game_log(g, "渡口通联 · 可种红薯");
         }
         ash_game_log(g, "门后灰潮了结 · 守望开始");
     }
@@ -1585,12 +1607,131 @@ static void log_quest_step_milestone(ash_game_t *g, uint8_t qid, uint8_t reached
     ash_game_log(g, k_ms[qid][reached - 1u]);
 }
 
+/* Bit 15 of the day latch marks "the paid second beat was used today"; day
+ * values stay below 32768 for the lifetime of the product. */
+#define QUEST_BEAT_SECOND 0x8000u
+#define QUEST_BEAT_PUSH_COST 8u
+
 bool ash_game_quest_beat_available(const ash_game_t *g, uint8_t qid)
 {
     if (!g || qid >= ASHBOX_QUEST_N) return false;
     if (g->pace_era != ASHBOX_PACE_V13) return true;
     uint16_t today = day_latch_today(g);
-    return g->quest_beat_day[qid] != today;
+    uint16_t latch = g->quest_beat_day[qid];
+    if ((uint16_t)(latch & 0x7FFFu) != today) return true;
+    if (latch & QUEST_BEAT_SECOND) return false;
+    return g->parts >= QUEST_BEAT_PUSH_COST;
+}
+
+/* C-1: the tag offers up to five candidates and the filter emits at most three.
+ * Precedence: a live quest beat, then gate-true branches, then the tag anchor,
+ * then table order; unaffordable cost branches never appear. */
+enum {
+    ASH_GATE_NONE = 0,
+    ASH_GATE_FOOD_LOW,
+    ASH_GATE_FOOD_HIGH,
+    ASH_GATE_WATER_LOW,
+    ASH_GATE_PARTS_LOW,
+    ASH_GATE_THREAT_HIGH,
+    ASH_GATE_TRUST_HIGH,
+    ASH_GATE_FATIGUE_HIGH,
+    ASH_GATE_EMBER_LOW,
+    ASH_GATE_CAMP_OPEN,
+    ASH_GATE_FARM_OPEN,
+    ASH_GATE_JOB_WORK,
+};
+
+static uint8_t branch_gate_of(uint8_t id)
+{
+    switch (id) {
+    case 37: case 51: case 59: return ASH_GATE_FOOD_LOW;
+    case 54: return ASH_GATE_FOOD_HIGH;
+    case 45: case 58: return ASH_GATE_WATER_LOW;
+    case 47: return ASH_GATE_PARTS_LOW;
+    case 39: case 43: return ASH_GATE_THREAT_HIGH;
+    case 41: return ASH_GATE_TRUST_HIGH;
+    case 49: return ASH_GATE_FATIGUE_HIGH;
+    case 42: return ASH_GATE_EMBER_LOW;
+    case 55: return ASH_GATE_CAMP_OPEN;
+    case 57: return ASH_GATE_FARM_OPEN;
+    case 60: return ASH_GATE_JOB_WORK;
+    default: return ASH_GATE_NONE;
+    }
+}
+
+static bool branch_gate_ok(const ash_game_t *g, uint8_t gate, uint8_t pid)
+{
+    switch (gate) {
+    case ASH_GATE_FOOD_LOW: return ash_game_total_food(g) <= 12u;
+    case ASH_GATE_FOOD_HIGH: return ash_game_total_food(g) >= 25u;
+    case ASH_GATE_WATER_LOW: return ash_game_total_water(g) <= 8u;
+    case ASH_GATE_PARTS_LOW: return ash_game_total_parts(g) <= 6u;
+    case ASH_GATE_THREAT_HIGH: return g->threat >= 55u;
+    case ASH_GATE_TRUST_HIGH:
+        return pid < g->pop && (*ash_game_person_at(g, pid)).trust >= 3;
+    case ASH_GATE_FATIGUE_HIGH:
+        return pid < g->pop && (*ash_game_person_at(g, pid)).fatigue >= 55u;
+    case ASH_GATE_EMBER_LOW: return g->ember <= 2u;
+    case ASH_GATE_CAMP_OPEN: return (g->world_flags & (uint8_t)ASH_WORLD_CAMP) != 0;
+    case ASH_GATE_FARM_OPEN:
+        return g->kitchen_lv >= 2 || (g->world_flags & (uint8_t)ASH_WORLD_FARM) != 0;
+    case ASH_GATE_JOB_WORK:
+        return pid < g->pop && g->person_job[pid] == ASHBOX_JOB_WORK;
+    default: return true;
+    }
+}
+
+static bool branch_quest_live(const ash_game_t *g, const ash_branch_def_t *b)
+{
+    if (b->quest_id >= ASHBOX_QUEST_N || b->quest_need == 255) return false;
+    if (quest_done_of(g, b->quest_id)) return false;
+    if (quest_step_of(g, b->quest_id) != b->quest_need) return false;
+    return ash_game_quest_beat_available(g, b->quest_id);
+}
+
+uint8_t ash_game_branch_pool(const ash_game_t *g, uint8_t tag, uint8_t *out, uint8_t cap)
+{
+    if (!g || !out || cap == 0 || tag >= ash_content_tag_count()) return 0;
+    uint8_t ids[ASHBOX_TAG_POOL_MAX];
+    uint8_t n = ash_content_tag_branches(tag, ids, ASHBOX_TAG_POOL_MAX);
+    uint8_t pid = g->exp.person_id;
+    if (pid >= g->pop || pid >= ASHBOX_PERSON_MAX) pid = 0;
+    uint8_t out_ids[ASHBOX_TAG_POOL_MAX];
+    uint8_t prio[ASHBOX_TAG_POOL_MAX];
+    uint8_t cn = 0;
+    for (uint8_t i = 0; i < n; i++) {
+        uint8_t id = ids[i];
+        const ash_branch_def_t *b = ash_content_branch(id);
+        if (!b) continue;
+        if (!ash_game_branch_affordable(g, id)) continue;
+        bool live = branch_quest_live(g, b);
+        uint8_t gate = branch_gate_of(id);
+        if (!live && !branch_gate_ok(g, gate, pid)) continue;
+        bool hard = gate == ASH_GATE_CAMP_OPEN || gate == ASH_GATE_FARM_OPEN;
+        if (live && hard && !branch_gate_ok(g, gate, pid)) continue;
+        out_ids[cn] = id;
+        prio[cn] = live ? 3 : (gate != ASH_GATE_NONE ? 2 : (i == 0 ? 1 : 0));
+        cn++;
+    }
+    if (cn == 0) {
+        out[0] = ids[0]; /* never an empty choice */
+        return 1;
+    }
+    for (uint8_t i = 1; i < cn; i++) {
+        uint8_t k = i;
+        while (k > 0 && prio[k - 1] < prio[k]) {
+            uint8_t tp = prio[k - 1];
+            prio[k - 1] = prio[k];
+            prio[k] = tp;
+            uint8_t ti = out_ids[k - 1];
+            out_ids[k - 1] = out_ids[k];
+            out_ids[k] = ti;
+            k--;
+        }
+    }
+    uint8_t emit = cn < cap ? cn : cap;
+    for (uint8_t i = 0; i < emit; i++) out[i] = out_ids[i];
+    return emit;
 }
 
 static void try_advance_quest(ash_game_t *g, uint8_t qid, uint8_t need_step)
@@ -1599,11 +1740,24 @@ static void try_advance_quest(ash_game_t *g, uint8_t qid, uint8_t need_step)
     if (quest_step_of(g, qid) != need_step) return;
     if (g->pace_era == ASHBOX_PACE_V13) {
         uint16_t today = day_latch_today(g);
-        if (g->quest_beat_day[qid] == today) {
-            ash_game_log(g, "这条线今天先到这，明天再往下");
-            return;
+        uint16_t latch = g->quest_beat_day[qid];
+        bool second = false;
+        if ((uint16_t)(latch & 0x7FFFu) == today) {
+            if (latch & QUEST_BEAT_SECOND) {
+                ash_game_log(g, "这条线今天先到这");
+                return;
+            }
+            /* G-2: one paid second beat per line per day keeps a long session
+             * moving without turning the daily rhythm into a grind. */
+            if (g->parts < QUEST_BEAT_PUSH_COST) {
+                ash_game_log(g, "这条线今天先到这");
+                return;
+            }
+            g->parts = (uint16_t)(g->parts - QUEST_BEAT_PUSH_COST);
+            second = true;
+            ash_game_log(g, "连夜赶了一段");
         }
-        g->quest_beat_day[qid] = today;
+        g->quest_beat_day[qid] = (uint16_t)(today | (second ? QUEST_BEAT_SECOND : 0u));
     }
     uint8_t next = (uint8_t)(need_step + 1u);
     quest_set_step(g, qid, next);
@@ -1625,6 +1779,14 @@ static void sync_quest2_catchup(ash_game_t *g)
     if (before == 0 && quest_step_of(g, 2) > before) {
         ash_game_log(g, "旧档补记 · 跳过灰潮听闻");
     }
+}
+
+uint32_t ash_game_roll_seed(const ash_game_t *g, unsigned salt)
+{
+    if (!g) return salt;
+    uint32_t pid = (uint32_t)(g->exp.person_id & 0x0Fu);
+    uint32_t hour = g->last_settle_unix > 0 ? (uint32_t)((g->last_settle_unix / 3600) % 24u) : 0u;
+    return g->day_key * 17u + g->expedition_total * 13u + pid * 7919u + hour * 104729u + salt;
 }
 
 void ash_game_new(ash_game_t *g)
@@ -1698,7 +1860,7 @@ void ash_game_new(ash_game_t *g)
     g->lore_twist = 0;
     g->shovel = 0;
     g->well_lv = 0;
-    g->pad_v9 = 0;
+    g->threat_acc = 0;
     g->water = 40;
     g->stash_water = 0;
     g->water_made_today = 0;
@@ -1719,12 +1881,12 @@ void ash_game_new(ash_game_t *g)
 static void set_line(ash_report_t *r, int i, const char *s)
 {
     if (i < 0 || i >= ASHBOX_REPORT_LINES) return;
-    snprintf(r->lines[i], sizeof(r->lines[i]), "%s", s);
+    ash_copy_utf8(r->lines[i], sizeof(r->lines[i]), s);
 }
 
-static unsigned fail_chance(const ash_game_t *g, ash_tier_t tier, uint8_t pid, ash_loadout_t load)
+static unsigned fail_chance_ex(const ash_game_t *g, ash_tier_t tier, uint8_t pid,
+                               uint8_t exp_pistol, uint8_t exp_ammo)
 {
-    (void)load; /* 携带档已停用；字段保留存档兼容 */
     unsigned fail_p = (tier == ASH_TIER_SHORT)   ? 5u
                       : (tier == ASH_TIER_BLOCK)  ? 12u
                       : (tier == ASH_TIER_HUNT)   ? 20u
@@ -1745,7 +1907,7 @@ static unsigned fail_chance(const ash_game_t *g, ash_tier_t tier, uint8_t pid, a
         }
     }
     /* 手枪带弹：略降空手而归；突然袭击免死另计 */
-    if (g->exp_pistol && g->exp_ammo > 0) {
+    if (exp_pistol && exp_ammo > 0) {
         if (fail_p >= 4u) fail_p -= 4u;
         else fail_p = 0;
     }
@@ -1761,13 +1923,17 @@ static unsigned fail_chance(const ash_game_t *g, ash_tier_t tier, uint8_t pid, a
     return fail_p;
 }
 
-static uint8_t pick_outcome_id(bool success, ash_tier_t tier, ash_loadout_t load, bool tutorial)
+static uint8_t pick_outcome_id(const ash_game_t *g, bool success, ash_tier_t tier,
+                               ash_loadout_t load, bool tutorial)
 {
+    (void)load; /* the loadout grades are retired; the field stays for the save ABI */
     if (tutorial && success) return 0;
     if (tier == ASH_TIER_HUNT) return success ? 9 : 10;
     if (tier == ASH_TIER_NIGHT) return success ? 11 : 12;
-    if (success && load == ASH_LOAD_FOOD) return 7;
-    if (success && load == ASH_LOAD_PARTS) return 8;
+    /* C-3: the two dead "loadout" outcomes now carry state-routed failures. Deep
+     * and night failures keep their own pools because quest beats live there. */
+    if (!success && tier == ASH_TIER_SHORT && ash_game_total_food(g) <= 8u) return 7;
+    if (!success && tier == ASH_TIER_BLOCK && g->threat >= 70u) return 8;
     if (tier == ASH_TIER_SHORT) return success ? 1 : 2;
     if (tier == ASH_TIER_BLOCK) return success ? 3 : 4;
     return success ? 5 : 6; /* deep */
@@ -1793,6 +1959,20 @@ static int farm_duty_boost_num(const ash_game_t *g)
     return boost;
 }
 
+static unsigned fail_chance(const ash_game_t *g, ash_tier_t tier, uint8_t pid,
+                            ash_loadout_t load)
+{
+    (void)load; /* 携带档已停用；字段保留存档兼容 */
+    return fail_chance_ex(g, tier, pid, g->exp_pistol, g->exp_ammo);
+}
+
+unsigned ash_game_depart_fail_pct(const ash_game_t *g, ash_tier_t tier, uint8_t pid,
+                                  uint8_t take_pistol, uint8_t ammo_n)
+{
+    if (!g || (unsigned)tier >= ASH_TIER_COUNT) return 0;
+    return fail_chance_ex(g, tier, pid, take_pistol, ammo_n);
+}
+
 static int work_duty_parts_num(const ash_game_t *g)
 {
     int boost = 0;
@@ -1807,7 +1987,7 @@ static int work_duty_parts_num(const ash_game_t *g)
         else if (tr == ASHBOX_TRAIT_WORK_SPD_20) boost += 20;
         else if (tr == ASHBOX_TRAIT_ALL_DOUBLE) boost += 20;
     }
-    if (boost > 120) boost = 120;
+    if (boost > 60) boost = 60;
     return boost;
 }
 
@@ -2037,7 +2217,7 @@ static void resolve_return(ash_game_t *g, bool success)
                     (seed % 4u) == 0u) {
                     g->world_flags |= (uint8_t)ASH_WORLD_CAMP2;
                     g->seed_root = sat_add_u8(g->seed_root, 1, ASHBOX_SEED_ROOT_CAP);
-                    ash_game_log(g, "渡口通联 · 红薯种可种更饱");
+                    ash_game_log(g, "渡口通联 · 红薯更饱");
                 }
                 if (((seed / 13u) % 100u) < 4u) {
                     g->seed_root = sat_add_u8(g->seed_root, 1, ASHBOX_SEED_ROOT_CAP);
@@ -2089,7 +2269,7 @@ static void resolve_return(ash_game_t *g, bool success)
             if (!(g->world_flags & ASH_WORLD_CAMP)) {
                 g->world_flags |= (uint8_t)ASH_WORLD_CAMP;
                 g->item[ASH_ITEM_SEED] = sat_add_u8(g->item[ASH_ITEM_SEED], 2, ASHBOX_ITEM_CAP);
-                ash_game_log(g, "铁棚有人回应 · 得了稻谷种");
+                ash_game_log(g, "铁棚回应 · 得了稻种");
                 try_advance_quest(g, 2, 1);
             } else {
                 try_advance_quest(g, 2, 1);
@@ -2138,7 +2318,7 @@ static void resolve_return(ash_game_t *g, bool success)
             carried_ammo--;
             g->exp_ammo = carried_ammo;
             death = ASH_DEATH_NONE;
-            ash_game_log(g, "手枪挡住突然袭击 · 捡回一条命");
+            ash_game_log(g, "手枪挡袭击 · 捡回一命");
         }
         g->report_death_kind = (uint8_t)death;
         if (death != ASH_DEATH_NONE) {
@@ -2189,6 +2369,9 @@ static void resolve_return(ash_game_t *g, bool success)
             if (carried_pistol && !(pid < ASHBOX_PERSON_MAX && (*ash_game_equip_pis_mut(g, (unsigned)(pid))))) {
                 g->pistol = sat_add_u8(g->pistol, 1, 20);
             }
+            /* B-8: one round is spent by an armed trip even without an assault,
+             * so carrying the pistol is a running cost, not free insurance. */
+            if (carried_pistol && carried_ammo > 0) carried_ammo--;
             g->ammo = sat_add_u8(g->ammo, carried_ammo, 99);
             g->exp_crowbar = 0;
             g->exp_pistol = 0;
@@ -2222,7 +2405,7 @@ static void resolve_return(ash_game_t *g, bool success)
     bool died_out = (g->report_death_kind != ASH_DEATH_NONE);
     bool tutorial = g->expedition_total < 3;
     if (!died_out) {
-        r->outcome_id = pick_outcome_id(success, tier, load, tutorial);
+        r->outcome_id = pick_outcome_id(g, success, tier, load, tutorial);
         {
             const ash_outcome_def_t *oc = ash_content_outcome(r->outcome_id);
             r->branch_count = oc->branch_count;
@@ -2232,7 +2415,7 @@ static void resolve_return(ash_game_t *g, bool success)
             }
             if (success && !tutorial) {
                 uint8_t tagged[ASHBOX_BRANCH_MAX];
-                uint8_t tn = ash_content_tag_branches(r->tag_id, tagged, ASHBOX_BRANCH_MAX);
+                uint8_t tn = ash_game_branch_pool(g, r->tag_id, tagged, ASHBOX_BRANCH_MAX);
                 if (tn > 0) {
                     r->branch_count = tn;
                     for (uint8_t i = 0; i < tn; i++) r->branch_ids[i] = tagged[i];
@@ -2266,9 +2449,9 @@ static void resolve_return(ash_game_t *g, bool success)
 static int dorm_consume_num(const ash_game_t *g)
 {
     /* 宿舍：L1:10 L2:11 L3+：仍11（歇得快，口粮不加） */
-    uint8_t lv = g->dorm_lv < 1 ? 1 : (g->dorm_lv > 5 ? 5 : g->dorm_lv);
-    if (lv >= 3) return 11;
-    return 9 + (int)lv;
+    /* Beds never tax the pantry: only the kitchen changes how much a body eats. */
+    (void)g;
+    return 10;
 }
 
 static int workshop_threat_num(const ash_game_t *g)
@@ -2301,6 +2484,7 @@ static void maybe_arm_crisis(ash_game_t *g)
     bool tutorial = g->expedition_total < 3;
     if (tutorial) return;
     if (g->threat < 80) return;
+    if (count_present(g) < 1) return; /* nobody to answer: keep it disarmed */
     g->crisis.pending = true;
     ash_game_log(g, "威胁临门 · 守夜抉择");
 }
@@ -2331,8 +2515,14 @@ static void apply_economy(ash_game_t *g, int64_t dt_s, int sleep_num, int sleep_
     if (ash_game_has_stove_lining(g)) consume_num -= 1;
     if (consume_num < 8) consume_num = 8;
     bool deep = (sleep_num != sleep_den);
-    if (deep && g->night_order == ASH_ORDER_RATION) consume_num = (consume_num * 7) / 10;
-    if (deep && g->night_order == ASH_ORDER_RUSH) parts_mult_num = (parts_mult_num * 13) / 10;
+    /* G-7: ration deepens when the station is already under pressure. */
+    if (deep && g->night_order == ASH_ORDER_RATION) {
+        consume_num = (consume_num * (g->threat >= 80 ? 6 : 7)) / 10;
+    }
+    if (deep && g->night_order == ASH_ORDER_RUSH) {
+        parts_mult_num = (parts_mult_num * 13) / 10;
+        consume_num = (consume_num * 11) / 10;
+    }
 
     int64_t food_gain = station_healthy_s * 4 * sleep_num / (3600 * (int64_t)sleep_den);
     if (g->hide_penalty_h > 0) {
@@ -2340,7 +2530,7 @@ static void apply_economy(ash_game_t *g, int64_t dt_s, int sleep_num, int sleep_
         food_gain /= 2;
     }
     int64_t parts_gain =
-        station_healthy_s * 2 * parts_mult_num * sleep_num / (3600 * 10 * (int64_t)sleep_den);
+        station_healthy_s * parts_mult_num * sleep_num / (3600 * 10 * (int64_t)sleep_den);
     if (station_has_trait(g, ASHBOX_TRAIT_WORK_PARTS_X2) ||
         station_has_trait(g, ASHBOX_TRAIT_ALL_DOUBLE)) {
         parts_gain *= 2;
@@ -2394,11 +2584,36 @@ static void apply_economy(ash_game_t *g, int64_t dt_s, int sleep_num, int sleep_
     }
 
     int rise = workshop_threat_num(g);
-    if (deep && g->night_order == ASH_ORDER_WATCH) rise = (rise * 7) / 10;
-    if (deep && g->night_order == ASH_ORDER_RUSH) rise = (rise * 12) / 10;
+    if (deep && g->night_order == ASH_ORDER_NONE) rise = (rise * 115) / 100;
+    if (deep && g->night_order == ASH_ORDER_WATCH) {
+        /* watch pays off most when the threat bar is already high */
+        int pct = g->threat >= 80 ? 60 : (g->threat >= 50 ? 75 : 85);
+        rise = (rise * pct) / 100;
+    }
+    if (deep && g->night_order == ASH_ORDER_RUSH) {
+        int pct = g->threat >= 80 ? 150 : (g->threat >= 50 ? 120 : 110);
+        rise = (rise * pct) / 100;
+    }
     /* 约每小时 +3 * (rise/10)；工坊抬高 rise，Q0 完成后 threat_rise_num 降为 7 */
-    int threat_add = (int)(dt_s * 3 * rise * sleep_num / (3600 * (int64_t)sleep_den * 10));
+    /* 0.15 x rise per hour, accumulated in hundredths so short settles still add up
+     * instead of flooring to zero (the carry lives in a former pad byte). */
+    int64_t hundredths = dt_s * 150 * rise * sleep_num / (3600 * (int64_t)sleep_den * 10);
+    hundredths += g->threat_acc;
+    int threat_add = (int)(hundredths / 100);
+    g->threat_acc = (uint8_t)(hundredths % 100);
+    if (g->crisis.reserved > 0) {
+        /* breach grace: no rise, and the window burns down with wall-clock hours */
+        threat_add = 0;
+        g->threat_acc = 0;
+        int hours = (int)(dt_s / 3600);
+        if (hours > 0) {
+            g->crisis.reserved = (uint8_t)(g->crisis.reserved > hours ? g->crisis.reserved - hours : 0);
+        }
+    }
     int th = (int)g->threat + threat_add;
+    int stage = ash_game_arc_stage(g);
+    int floor_th = stage == 2 ? 30 : (stage == 1 ? 20 : 0);
+    if (th < floor_th) th = floor_th;
     if (th > 100) th = 100;
     g->threat = (uint8_t)th;
 
@@ -2530,14 +2745,12 @@ void ash_game_settle(ash_game_t *g, const ash_clock_info_t *clk)
     /* labor_s：健康按满工、虚弱按半工，再折成「等效健康秒」；present_s：在站人·秒 */
     int64_t labor_s = 0;
     int64_t present_s = 0;
-    if (g->exp.active && g->exp.remaining_s <= (uint32_t)dt) {
+    if (g->exp.active && g->exp.remaining_s >= 0 && g->exp.remaining_s <= (uint32_t)dt) {
         int64_t returned_at = (int64_t)g->exp.remaining_s;
         int eid = (int)g->exp.person_id;
         int labor_before = labor_weight_excluding(g, eid);
         int present_before = count_present(g); /* away already excluded */
-        unsigned roll = (unsigned)(g->day_key * 17u + g->expedition_total * 13u +
-                                   (unsigned)g->exp.loadout * 9u) %
-                        100u;
+        unsigned roll = (unsigned)(ash_game_roll_seed(g, (unsigned)g->exp.loadout * 9u) % 100u);
         unsigned fail_p = fail_chance(g, g->exp.tier, g->exp.person_id, g->exp.loadout);
         resolve_return(g, roll >= fail_p);
         int labor_after = labor_weight(g);
@@ -2559,6 +2772,15 @@ void ash_game_settle(ash_game_t *g, const ash_clock_info_t *clk)
         tick_farm(g, dt);
         tick_injure(g, dt);
         tick_fatigue_rest(g, dt);
+        /* G-7: the no-order night is the rest choice: extra recovery while asleep. */
+        if (clk->in_deep_sleep_segment && g->night_order == ASH_ORDER_NONE) {
+            int extra = (int)(dt / 450); /* +8 per hour */
+            for (int i = 0; i < g->pop && i < ASHBOX_PERSON_MAX; i++) {
+                ash_person_t *p = ash_game_person_mut(g, (unsigned)(i));
+                if (p->state == ASH_PERSON_AWAY) continue;
+                add_fatigue(p, -extra);
+            }
+        }
         tick_chore(g);
         tick_wanderer(g, dt);
     }
@@ -2568,7 +2790,7 @@ void ash_game_settle(ash_game_t *g, const ash_clock_info_t *clk)
     (void)ash_game_try_clear(g);
     g->last_settle_unix += dt;
     if (g->last_settle_unix > 0) {
-        uint32_t day = (uint32_t)(g->last_settle_unix / 86400) + 1u;
+        uint32_t day = (uint32_t)local_day_index(g->last_settle_unix) + 1u;
         if (day != g->day_key) {
             g->day_key = day;
             g->day_latch_abx = ASHBOX_DAY_LATCH_NEVER; /* 抗生素日闩重置 */
@@ -2585,7 +2807,7 @@ bool ash_game_wall_unix_usable(const ash_game_t *g, int64_t unix_now)
     if (!g || g->last_settle_unix <= 0) return true;
     /* ~2 min skew OK; larger backward jumps are typical after a power-cut RTC reset. */
     if (unix_now + 120 < g->last_settle_unix) return false;
-    uint32_t day = (uint32_t)(unix_now / 86400) + 1u;
+    uint32_t day = (uint32_t)local_day_index(unix_now) + 1u;
     /* Never let a wall snap pull day_key backwards (wipes day latches / 日勤). */
     if (day < g->day_key) return false;
     return true;
@@ -2594,7 +2816,7 @@ bool ash_game_wall_unix_usable(const ash_game_t *g, int64_t unix_now)
 void ash_game_note_wall_time(ash_game_t *g, int64_t unix_now)
 {
     if (!g || !ash_game_wall_unix_usable(g, unix_now)) return;
-    uint32_t day = (uint32_t)(unix_now / 86400) + 1u;
+    uint32_t day = (uint32_t)local_day_index(unix_now) + 1u;
     if (day != g->day_key) {
         g->day_key = day;
         g->day_latch_abx = ASHBOX_DAY_LATCH_NEVER;
@@ -2701,25 +2923,34 @@ bool ash_game_start_expedition(ash_game_t *g, ash_tier_t tier, uint8_t person_id
     return ash_game_start_expedition_ex(g, tier, person_id, 0, 0, 0);
 }
 
+/* Join people the two upgrades unlock, but never past what the station can
+ * actually house: beds and the kitchen/workshop tier both cap the roster, and a
+ * wiped-out station (pop 0) is repopulated only by a wanderer, never by a build. */
 static void try_join_people(ash_game_t *g)
 {
-    if (g->kitchen_lv >= 2 && g->pop < 2) {
-        g->pop = 2;
-        (*ash_game_person_mut(g, (unsigned)(1))).id = 1;
-        (*ash_game_person_mut(g, (unsigned)(1))).state = ASH_PERSON_HEALTHY;
-        (*ash_game_person_mut(g, (unsigned)(1))).injure_remain_s = 0;
-        (*ash_game_person_mut(g, (unsigned)(1))).trust = 0;
-        (*ash_game_person_mut(g, (unsigned)(1))).fatigue = 0;
-        ash_game_log(g, "老阙进站了");
-    }
-    if (g->workshop_lv >= 2 && g->pop < 3) {
-        g->pop = 3;
-        (*ash_game_person_mut(g, (unsigned)(2))).id = 2;
-        (*ash_game_person_mut(g, (unsigned)(2))).state = ASH_PERSON_HEALTHY;
-        (*ash_game_person_mut(g, (unsigned)(2))).injure_remain_s = 0;
-        (*ash_game_person_mut(g, (unsigned)(2))).trust = 0;
-        (*ash_game_person_mut(g, (unsigned)(2))).fatigue = 0;
-        ash_game_log(g, "小芒进站了");
+    if (!g || g->pop == 0) return;
+    int cap = 1;
+    if (g->kitchen_lv >= 2) cap = 2;
+    if (g->workshop_lv >= 2) cap = 3;
+    int beds = ash_game_beds(g);
+    if (cap > beds) cap = beds;
+    while (g->pop > 0 && g->pop < cap && g->pop < ASHBOX_PERSON_MAX) {
+        unsigned idx = g->pop;
+        ash_person_t *p = ash_game_person_mut(g, idx);
+        p->id = (uint8_t)idx;
+        p->state = ASH_PERSON_HEALTHY;
+        p->injure_remain_s = 0;
+        p->trust = 0;
+        p->fatigue = 0;
+        p->flags = 0;
+        g->person_job[idx] = ASHBOX_JOB_REST;
+        g->person_trait[idx] = ASHBOX_TRAIT_NONE;
+        *ash_game_equip_bp_mut(g, idx) = 0;
+        *ash_game_equip_pis_mut(g, idx) = 0;
+        g->pop = (uint8_t)(g->pop + 1u);
+        if (idx == 1) ash_game_log(g, "老阙进站了");
+        else if (idx == 2) ash_game_log(g, "小芒进站了");
+        else ash_game_log(g, "又有人进站了");
     }
 }
 
@@ -2743,7 +2974,7 @@ bool ash_game_upgrade(ash_game_t *g, int building)
     {
         char logb[ASHBOX_JOURNAL_LEN];
         if (building == 0 && (int)*lv >= max_lv)
-            snprintf(logb, sizeof(logb), "宿舍升满 · 歇得快不加粮");
+            snprintf(logb, sizeof(logb), "宿舍升满 · 歇得快");
         else if (building == 2)
             snprintf(logb, sizeof(logb), "工坊%u级 · 更快也更吵", (unsigned)*lv);
         else {
@@ -2847,7 +3078,7 @@ bool ash_game_buy_quiet_gear(ash_game_t *g)
     if (cost == 0 || g->parts < cost) return false;
     g->parts = (uint16_t)(g->parts - cost);
     g->quiet_gear = 1;
-    ash_game_log(g, "静音轮装好 · 威胁涨得慢了");
+    ash_game_log(g, "静音轮装好 · 威胁更慢");
     clamp_economy(g);
     g->crc = ash_game_crc(g);
     return true;
@@ -2860,7 +3091,7 @@ bool ash_game_buy_door_bolt(ash_game_t *g)
     if (cost == 0 || g->parts < cost) return false;
     g->parts = (uint16_t)(g->parts - cost);
     g->door_bolt = 1;
-    ash_game_log(g, "门扣装好 · 威胁更慢修门更省");
+    ash_game_log(g, "门扣装好 · 修门更省");
     clamp_economy(g);
     g->crc = ash_game_crc(g);
     return true;
@@ -2911,7 +3142,7 @@ bool ash_game_buy_box_lamp(ash_game_t *g)
     if (cost == 0 || g->ember < cost) return false;
     g->ember = (uint16_t)(g->ember - cost);
     g->pad_v10b = (uint8_t)(g->pad_v10b | ASHBOX_PAD_BOX_LAMP);
-    ash_game_log(g, "匣灯亮了 · 空手而归时威胁更轻");
+    ash_game_log(g, "匣灯亮了 · 空手威胁轻");
     clamp_economy(g);
     g->crc = ash_game_crc(g);
     return true;
@@ -2987,12 +3218,23 @@ void ash_game_ack_report(ash_game_t *g)
     g->crc = ash_game_crc(g);
 }
 
+bool ash_game_branch_affordable(const ash_game_t *g, uint8_t branch_id)
+{
+    if (!g) return false;
+    const ash_branch_def_t *b = ash_content_branch(branch_id);
+    if (!b) return false;
+    if (b->food_delta < 0 && ash_game_total_food(g) < (uint16_t)(-(int)b->food_delta)) return false;
+    if (b->parts_delta < 0 && ash_game_total_parts(g) < (uint16_t)(-(int)b->parts_delta)) return false;
+    return true;
+}
+
 bool ash_game_pick_branch(ash_game_t *g, uint8_t branch_slot)
 {
     if (!g->report.pending || g->report.branch_resolved) return false;
     if (branch_slot >= g->report.branch_count) return false;
     uint8_t bid = g->report.branch_ids[branch_slot];
     const ash_branch_def_t *b = ash_content_branch(bid);
+    if (!ash_game_branch_affordable(g, bid)) return false; /* a cost nothing can pay */
     /* exp.person_id 在 settle 归来后仍保留，指向本次归来者 */
     uint8_t target = g->exp.person_id;
     if (target >= g->pop || target >= ASHBOX_PERSON_MAX) target = 0;
@@ -3005,6 +3247,9 @@ bool ash_game_pick_branch(ash_game_t *g, uint8_t branch_slot)
 
     int th = (int)g->threat + b->threat_delta;
     if (th < 0) th = 0;
+    int stage = ash_game_arc_stage(g);
+    int floor_th = stage == 2 ? 30 : (stage == 1 ? 20 : 0);
+    if (th < floor_th) th = floor_th;
     if (th > 100) th = 100;
     g->threat = (uint8_t)th;
 
@@ -3065,8 +3310,9 @@ bool ash_game_crisis_option_ok(const ash_game_t *g, ash_crisis_opt_t opt)
     case ASH_CRISIS_FORTIFY:
         return g->parts >= (uint16_t)fortify_cost(g);
     case ASH_CRISIS_HIDE:
-        /* 在站即可躲（含虚弱/受伤），保证危机始终至少有一条出路 */
-        return count_present(g) >= 1;
+        /* Always legal: even an empty station can barricade behind the door, so a
+         * pending crisis can never leave the player without an option. */
+        return true;
     default:
         return false;
     }
@@ -3078,9 +3324,19 @@ uint16_t ash_game_crisis_fortify_cost(const ash_game_t *g)
     return (uint16_t)fortify_cost(g);
 }
 
+int ash_game_crisis_band(const ash_game_t *g)
+{
+    if (!g) return 0;
+    if (g->threat >= 100) return 3;
+    if (g->threat >= 90) return 2;
+    if (g->threat >= 80) return 1;
+    return 0;
+}
+
 bool ash_game_resolve_crisis(ash_game_t *g, ash_crisis_opt_t opt)
 {
     if (!ash_game_crisis_option_ok(g, opt)) return false;
+    int band = ash_game_crisis_band(g);
     switch (opt) {
     case ASH_CRISIS_TALK: {
         int drop = 20;
@@ -3089,18 +3345,28 @@ bool ash_game_resolve_crisis(ash_game_t *g, ash_crisis_opt_t opt)
             if (i == 0 && (*ash_game_person_mut(g, (unsigned)(i))).state == ASH_PERSON_HEALTHY) drop = 35;
             else if (i == 0) drop = 28;
         }
+        /* G-3: later bands cost more effort and buy a little less. */
+        drop -= band * 4;
+        int floor_v = 15 + band * 5;
+        if (drop < floor_v) drop = floor_v;
         int th = (int)g->threat - drop;
-        if (th < 15) th = 15;
+        if (th < floor_v) th = floor_v;
         g->threat = (uint8_t)th;
+        for (int i = 0; i < g->pop && i < ASHBOX_PERSON_MAX; i++) {
+            if ((*ash_game_person_mut(g, (unsigned)(i))).state != ASH_PERSON_AWAY) {
+                add_fatigue(&(*ash_game_person_mut(g, (unsigned)(i))), 8);
+            }
+        }
         ash_game_log(g, "阿禾把话摊开 · 门外退了");
         try_advance_quest(g, 0, 3);
         if (!quest_done_of(g, 0) && quest_step_of(g, 0) >= 4) finish_quest(g, 0);
         break;
     }
     case ASH_CRISIS_FORTIFY: {
-        int cost = fortify_cost(g);
+        int cost = fortify_cost(g) + band;
+        if (cost > 5) cost = 5;
         g->parts = (uint16_t)(g->parts - (uint16_t)cost);
-        int th = (int)g->threat - 40;
+        int th = (int)g->threat - (40 + band * 2);
         if (th < 10) th = 10;
         g->threat = (uint8_t)th;
         ash_game_log(g, "锁扣敲死 · 闸门扛住了");
@@ -3113,10 +3379,17 @@ bool ash_game_resolve_crisis(ash_game_t *g, ash_crisis_opt_t opt)
         for (int i = 0; i < g->pop && i < ASHBOX_PERSON_MAX; i++) {
             if (i == 2 && (*ash_game_person_mut(g, (unsigned)(i))).state != ASH_PERSON_AWAY) drop = 28;
         }
+        drop += band * 2;
+        int floor_v = 20 + band * 2;
         int th = (int)g->threat - drop;
-        if (th < 20) th = 20;
+        if (th < floor_v) th = floor_v;
         g->threat = (uint8_t)th;
-        g->hide_penalty_h = 4;
+        g->hide_penalty_h = (uint8_t)(4 + band * 2);
+        for (int i = 0; i < g->pop && i < ASHBOX_PERSON_MAX; i++) {
+            if ((*ash_game_person_mut(g, (unsigned)(i))).state != ASH_PERSON_AWAY) {
+                add_fatigue(&(*ash_game_person_mut(g, (unsigned)(i))), 6);
+            }
+        }
         ash_game_log(g, "小芒捂住呼吸 · 一夜未出");
         try_advance_quest(g, 0, 3);
         if (!quest_done_of(g, 0) && quest_step_of(g, 0) >= 4) finish_quest(g, 0);
@@ -3124,6 +3397,19 @@ bool ash_game_resolve_crisis(ash_game_t *g, ash_crisis_opt_t opt)
     }
     default:
         return false;
+    }
+    /* G-4: a breach at the top band ends the crisis but costs the station a
+     * grace window, fatigue and a part instead of soft-locking an unarmed one. */
+    if (band >= 3) {
+        if (g->threat > 79) g->threat = 79;
+        g->crisis.reserved = 6;
+        for (int i = 0; i < g->pop && i < ASHBOX_PERSON_MAX; i++) {
+            if ((*ash_game_person_mut(g, (unsigned)(i))).state != ASH_PERSON_AWAY) {
+                add_fatigue(&(*ash_game_person_mut(g, (unsigned)(i))), 10);
+            }
+        }
+        if (g->parts > 0) g->parts--;
+        ash_game_log(g, "闸门被顶开 · 门扣坏了");
     }
     g->crisis.pending = false;
     g->crc = ash_game_crc(g);
@@ -3145,7 +3431,7 @@ const char *ash_game_radio(const ash_game_t *g)
             snprintf(s_line, sizeof(s_line), "带回 口粮%d 零件%d", (int)g->report.food_delta,
                      (int)g->report.parts_delta);
         } else {
-            snprintf(s_line, sizeof(s_line), "%s", g->report.lines[0]);
+            ash_copy_utf8(s_line, sizeof(s_line), g->report.lines[0]);
         }
         return s_line;
     }
@@ -3637,6 +3923,11 @@ bool ash_game_trade_can_pay(const ash_game_t *g, ash_trade_t kind)
         return ash_game_total_parts(g) >= ASHBOX_ABX_TRADE_PARTS &&
                g->med_abx < ASHBOX_ITEM_CAP &&
                g->day_latch_abx != day_latch_today(g);
+    case ASH_TRADE_EMBER_FOR_PARTS:
+    case ASH_TRADE_EMBER_FOR_WATER:
+        return g->ember >= 1;
+    case ASH_TRADE_EMBER_FOR_STIM:
+        return g->ember >= 1 && g->med_stim < ASHBOX_ITEM_CAP;
     default:
         return false;
     }
@@ -3773,6 +4064,24 @@ bool ash_game_trade(ash_game_t *g, ash_trade_t kind)
             g->med_abx = sat_add_u8(g->med_abx, 1, ASHBOX_ITEM_CAP);
             g->day_latch_abx = day_latch_today(g);
         }
+    } else if (kind == ASH_TRADE_EMBER_FOR_PARTS) {
+        if (g->ember >= 1) {
+            g->ember--;
+            (void)ash_game_give_parts(g, 8, NULL);
+            ok = true;
+        }
+    } else if (kind == ASH_TRADE_EMBER_FOR_WATER) {
+        if (g->ember >= 1) {
+            g->ember--;
+            (void)ash_game_give_water(g, 6, NULL);
+            ok = true;
+        }
+    } else if (kind == ASH_TRADE_EMBER_FOR_STIM) {
+        if (g->ember >= 1 && g->med_stim < ASHBOX_ITEM_CAP) {
+            g->ember--;
+            g->med_stim++;
+            ok = true;
+        }
     }
     if (!ok) return false;
     {
@@ -3818,6 +4127,9 @@ const char *ash_game_trade_label(ash_trade_t kind)
     case ASH_TRADE_PARTS_FOR_EMBER: return "零件20换余烬1";
     case ASH_TRADE_PARTS_FOR_STIM: return "零件30换肾上腺素";
     case ASH_TRADE_PARTS_FOR_ABX: return "零件24换抗生素";
+    case ASH_TRADE_EMBER_FOR_PARTS: return "余烬1换零件8";
+    case ASH_TRADE_EMBER_FOR_WATER: return "余烬1换水6";
+    case ASH_TRADE_EMBER_FOR_STIM: return "余烬1换肾上腺素";
     default: return "?";
     }
 }
@@ -3837,11 +4149,44 @@ const char *ash_game_trade_hint(ash_trade_t kind)
     case ASH_TRADE_PARTS_FOR_EMBER: return "每日每站限换1烬";
     case ASH_TRADE_PARTS_FOR_STIM: return "救急压重伤 · 极贵";
     case ASH_TRADE_PARTS_FOR_ABX: return "退热伤 · 每日限1";
+    case ASH_TRADE_EMBER_FOR_PARTS:
+    case ASH_TRADE_EMBER_FOR_WATER:
+    case ASH_TRADE_EMBER_FOR_STIM: return "余烬有出口 · 应急换";
     default: return "";
     }
 }
 
 /* 交易底栏：声望可见 + 二次门槛（P0-3） */
+/* U-3: what the player actually holds on the paying side of this exchange. */
+static unsigned trade_pay_stock(const ash_game_t *g, ash_trade_t kind)
+{
+    switch (kind) {
+    case ASH_TRADE_JERKY_FOR_SEED:
+    case ASH_TRADE_JERKY_FOR_ROOT:
+        return g->item[ASH_ITEM_JERKY];
+    case ASH_TRADE_PARTS_FOR_ROOT:
+    case ASH_TRADE_PARTS_FOR_EMBER:
+    case ASH_TRADE_PARTS_FOR_STIM:
+    case ASH_TRADE_PARTS_FOR_ABX:
+    case ASH_TRADE_PARTS_FOR_IRON:
+        return ash_game_total_parts(g);
+    case ASH_TRADE_FOOD_FOR_WATER:
+        return ash_game_total_food(g);
+    case ASH_TRADE_WATER_FOR_FOOD:
+    case ASH_TRADE_WATER_FOR_IRON:
+        return ash_game_total_water(g);
+    case ASH_TRADE_IRON_FOR_WATER:
+    case ASH_TRADE_IRON_FOR_PARTS:
+        return g->iron;
+    case ASH_TRADE_EMBER_FOR_PARTS:
+    case ASH_TRADE_EMBER_FOR_WATER:
+    case ASH_TRADE_EMBER_FOR_STIM:
+        return g->ember;
+    default:
+        return 0;
+    }
+}
+
 void ash_game_trade_footer(const ash_game_t *g, ash_trade_t kind, char *out, size_t out_n)
 {
     if (!out || out_n == 0) return;
@@ -3851,7 +4196,7 @@ void ash_game_trade_footer(const ash_game_t *g, ash_trade_t kind, char *out, siz
         (kind == ASH_TRADE_JERKY_FOR_ROOT || kind == ASH_TRADE_PARTS_FOR_ROOT);
     unsigned rep = ferry ? (unsigned)g->rep_ferry : (unsigned)g->rep_shed;
     const char *camp = ferry ? "渡口" : "铁棚";
-    snprintf(out, out_n, "%s望%u · 满2可同日二次", camp, rep);
+    snprintf(out, out_n, "%s望%u · 有%u", camp, rep, trade_pay_stock(g, kind));
 }
 
 bool ash_game_craft_can(const ash_game_t *g, ash_craft_t kind)
@@ -3914,6 +4259,7 @@ bool ash_game_craft(ash_game_t *g, ash_craft_t kind)
         ash_game_log(g, "工作台支好了");
         break;
     case ASH_CRAFT_BUCKET:
+        if (g->bucket >= 20) return false; /* cap: refuse instead of eating iron */
         if (!ash_game_take_iron(g, ASHBOX_CRAFT_BUCKET_IRON)) return false;
         g->bucket = (uint8_t)(g->bucket + 1);
         ash_game_log(g, "水罐做好 · 能多存水");
@@ -3924,13 +4270,15 @@ bool ash_game_craft(ash_game_t *g, ash_craft_t kind)
         ash_game_log(g, "手枪做好了");
         break;
     case ASH_CRAFT_AMMO:
+        if (g->ammo >= 250) return false;
         if (!ash_game_take_iron(g, ASHBOX_CRAFT_AMMO_IRON)) return false;
-        if (g->ammo < 250) g->ammo = (uint8_t)(g->ammo + 1);
+        g->ammo = (uint8_t)(g->ammo + 1);
         ash_game_log(g, "子弹+1");
         break;
     case ASH_CRAFT_CROWBAR:
+        if (g->crowbar >= 20) return false;
         if (!ash_game_take_iron(g, ASHBOX_CRAFT_CROWBAR_IRON)) return false;
-        if (g->crowbar < 20) g->crowbar = (uint8_t)(g->crowbar + 1);
+        g->crowbar = (uint8_t)(g->crowbar + 1);
         ash_game_log(g, "撬棍做好了");
         break;
     default:
@@ -4286,12 +4634,51 @@ static void tick_wanderer(ash_game_t *g, int64_t dt_s)
     else tick_wanderer_legacy(g, dt_s);
 }
 
+int ash_game_arc_stage(const ash_game_t *g)
+{
+    if (!g) return 0;
+    uint8_t bits = (uint8_t)(g->world_flags & (uint8_t)ASH_WORLD_ARC_MASK);
+    if (bits == ASH_WORLD_ARC_A) return 1;
+    if (bits == ASH_WORLD_ARC_B) return 2;
+    if (bits == ASH_WORLD_ARC_MASK) return 3;
+    return 0;
+}
+
+/* G-6: re-arm the three lines for another arc; steps follow the arc stage. */
+static void arm_arc(ash_game_t *g, uint8_t bits, uint8_t q0, uint8_t q1, uint8_t q2)
+{
+    g->world_flags = (uint8_t)((g->world_flags & (uint8_t)~ASH_WORLD_ARC_MASK) | bits);
+    g->quest_step[0] = q0;
+    g->quest_step[1] = q1;
+    g->quest_done[0] = 0;
+    g->quest_done[1] = 0;
+    g->quest2_step = q2;
+    g->quest2_done = 0;
+    g->clear_toast_pending = 1;
+    for (int qi = 0; qi < ASHBOX_QUEST_N; qi++) g->quest_beat_day[qi] = ASHBOX_DAY_LATCH_NEVER;
+}
+
 bool ash_game_try_clear(ash_game_t *g)
 {
-    if (!g || g->run_cleared) return false;
+    if (!g) return false;
+    int stage = ash_game_arc_stage(g);
+    if (g->run_cleared) {
+        /* Later arcs complete only once; reaching the end leaves the game open. */
+        if (stage != 1 && stage != 2) return false;
+        if (!quest_done_of(g, 0) || !quest_done_of(g, 1) || !quest_done_of(g, 2)) return false;
+        if (stage == 1) {
+            arm_arc(g, (uint8_t)ASH_WORLD_ARC_B, 0, 0, 2);
+            ash_game_log(g, "灰潮再来 · 这一趟更硬");
+        } else {
+            g->world_flags |= (uint8_t)ASH_WORLD_ARC_MASK;
+            ash_game_log(g, "两趟了结 · 日子还长");
+        }
+        return true;
+    }
     if (!quest_done_of(g, 0) || !quest_done_of(g, 1) || !quest_done_of(g, 2)) return false;
     if (!g->lore_twist) return false;
     g->run_cleared = 1;
+    if (stage == 0) arm_arc(g, (uint8_t)ASH_WORLD_ARC_A, 3, 3, 2);
     g->clear_toast_pending = 1;
     ash_game_log(g, "三线了结 · 据点还在");
     return true;
@@ -4342,7 +4729,7 @@ bool ash_game_use_super_core(ash_game_t *g)
     g->build_cap_bonus = 2;
     g->loot_bonus_perm_pct = 50;
     g->farm_plots_unlocked = ASHBOX_FARM_PLOTS_MAX;
-    ash_game_log(g, "用了超级核心 · 田地建档远征全变强");
+    ash_game_log(g, "超级核心已用 · 田地变强");
     g->crc = ash_game_crc(g);
     return true;
 }

@@ -7,15 +7,16 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# Every player-facing unit, including the split page files (C-UI1). A new page
+# unit used to escape this gate entirely, which is how font-missing glyphs shipped.
 SOURCES = [
     ROOT / "main/ashbox_content.c",
     ROOT / "main/ashbox_game.c",
     ROOT / "main/ashbox_game_loot.c",
     ROOT / "main/ashbox_help_copy.c",
-    ROOT / "main/ashbox_ui.c",
     ROOT / "main/ashbox_save.c",
     ROOT / "main/main.c",
-]
+] + sorted(ROOT.glob("main/ashbox_ui*.c"))
 SYMBOLS = ROOT / "main/ashbox_font_symbols.txt"
 FONT_C = ROOT / "assets/fonts/ashbox_font_16.c"
 STR_RE = re.compile(r'"((?:\\.|[^"\\])*)"')

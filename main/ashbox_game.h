@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #define ASHBOX_PERSON_CORE 3 /* mid-save person/equip arrays (ABI frozen) */
 #define ASHBOX_PERSON_MAX 6  /* live pop cap; slots 3..5 in v12 person_ext */
@@ -30,8 +31,8 @@
 #define ASHBOX_LABOR_FATIGUE_PER_H 5
 #define ASHBOX_LABOR_AUTO_REST 80
 #define ASHBOX_LABOR_REHIRE_BELOW 50
-#define ASHBOX_FARM_GRAIN_BASE 30
-#define ASHBOX_FARM_ROOT_BASE 240
+#define ASHBOX_FARM_GRAIN_BASE 45
+#define ASHBOX_FARM_ROOT_BASE 150
 #define ASHBOX_FARM_GRAIN_BONUS_PER_H 2
 #define ASHBOX_FARM_ROOT_BONUS_PER_H 8
 #define ASHBOX_FARM_GRAIN_BONUS_CAP 24
@@ -57,9 +58,9 @@
 #define ASHBOX_PIT_COST_PARTS 10u
 #define ASHBOX_WELL_UPGRADE_COST_PARTS 20u
 #define ASHBOX_PIT_WATER_PER_H 1u
-#define ASHBOX_PIT_WATER_DAY_CAP 12u
+#define ASHBOX_PIT_WATER_DAY_CAP 15u
 #define ASHBOX_WELL_WATER_PER_H 6u
-#define ASHBOX_WELL_WATER_DAY_CAP 36u
+#define ASHBOX_WELL_WATER_DAY_CAP 48u
 #define ASHBOX_WELL_UPGRADE_S 86400u
 #define ASHBOX_CREW_EXHAUST_S 86400u /* legacy field; no longer used for lock */
 #define ASHBOX_WATER_BASE_CAP 50u
@@ -170,6 +171,9 @@ typedef enum {
     ASH_TRADE_PARTS_FOR_EMBER,
     ASH_TRADE_PARTS_FOR_STIM, /* 件换肾上腺素（救急） */
     ASH_TRADE_PARTS_FOR_ABX,  /* 件换抗生素（热伤） */
+    ASH_TRADE_EMBER_FOR_PARTS, /* 余烬换零件 */
+    ASH_TRADE_EMBER_FOR_WATER, /* 余烬换水 */
+    ASH_TRADE_EMBER_FOR_STIM,  /* 余烬换肾上腺素 */
     ASH_TRADE_COUNT,
 } ash_trade_t;
 
@@ -199,6 +203,9 @@ typedef enum {
     ASH_WORLD_CAMP = 1u << 0,  /* 铁棚通联 */
     ASH_WORLD_FARM = 1u << 1,  /* 菜地可用（或食堂达标自动） */
     ASH_WORLD_CAMP2 = 1u << 2, /* 灰河渡口 */
+    ASH_WORLD_ARC_A = 1u << 6, /* 通关后第一弧 */
+    ASH_WORLD_ARC_B = 1u << 7, /* 通关后第二弧 */
+    ASH_WORLD_ARC_MASK = 3u << 6,
 } ash_world_flag_t;
 
 typedef enum {
@@ -315,7 +322,7 @@ typedef struct {
      * offsetof(water) == offsetof(ash_game_v8_t, crc). */
     uint8_t shovel;                 /* 0/1 铁铲 */
     uint8_t well_lv;                /* 0无 1深坑 2水井 */
-    uint8_t pad_v9;
+    uint8_t threat_acc; /* v13: 0..99 hundredths carried between settles (was pad_v9) */
     uint16_t water;
     uint16_t stash_water;
     uint16_t water_made_today;      /* 当日产水计数 */
@@ -481,6 +488,23 @@ typedef struct {
     int64_t dt_s;
 } ash_clock_info_t;
 
+/* Copy `src` into `dst` (capacity n) ending on a UTF-8 codepoint boundary.
+ * The usual snprintf("%s") trims bytes and can split a 3-byte CJK glyph, which
+ * then renders as a broken cell; every fixed player-facing field uses this. */
+static inline void ash_copy_utf8(char *dst, size_t n, const char *src)
+{
+    if (!dst || n == 0) return;
+    if (!src) {
+        dst[0] = '\0';
+        return;
+    }
+    size_t len = 0;
+    while (src[len] != '\0' && len + 1 < n) len++;
+    while (len > 0 && ((unsigned char)src[len] & 0xC0u) == 0x80u) len--;
+    memcpy(dst, src, len);
+    dst[len] = '\0';
+}
+
 void ash_game_new(ash_game_t *g);
 void ash_game_after_migrate(ash_game_t *g); /* clamp + defaults for older saves */
 /** Expand legacy uint8 day latches into v11 uint16 fields (migrators). */
@@ -494,6 +518,8 @@ void ash_game_note_wall_time(ash_game_t *g, int64_t unix_now);
 bool ash_game_can_depart(const ash_game_t *g);
 bool ash_game_person_can_depart(const ash_game_t *g, uint8_t person_id);
 bool ash_game_tier_unlocked(const ash_game_t *g, ash_tier_t tier);
+/** Deterministic roll seed mixing day, expedition count, person and settle hour. */
+uint32_t ash_game_roll_seed(const ash_game_t *g, unsigned salt);
 bool ash_game_start_expedition(ash_game_t *g, ash_tier_t tier, uint8_t person_id,
                                ash_loadout_t loadout);
 /* New depart path: food = hours*3; optional crowbar/pistol/ammo carried. */
@@ -501,6 +527,9 @@ bool ash_game_start_expedition_ex(ash_game_t *g, ash_tier_t tier, uint8_t person
                                   uint8_t crowbar_n, uint8_t take_pistol, uint8_t ammo_n);
 uint16_t ash_game_expedition_water_cost(ash_tier_t tier);
 uint16_t ash_game_expedition_food_cost(ash_tier_t tier);
+/** Preview the real empty-handed chance for a departure choice. */
+unsigned ash_game_depart_fail_pct(const ash_game_t *g, ash_tier_t tier, uint8_t pid,
+                                  uint8_t take_pistol, uint8_t ammo_n);
 int ash_game_crowbar_carry_cap(const ash_game_t *g, uint8_t person_id);
 bool ash_game_work_locked(const ash_game_t *g);
 bool ash_game_block_reason(const ash_game_t *g, ash_act_t act, char *out, size_t out_n);
@@ -563,7 +592,15 @@ bool ash_game_unlock_gate(ash_game_t *g);
 bool ash_game_tide_offer_shards(ash_game_t *g); /* 灰潮步2：交2灰片等价推进 */
 void ash_game_ack_report(ash_game_t *g);
 bool ash_game_pick_branch(ash_game_t *g, uint8_t branch_slot);
+/** True when the branch's resource cost is covered by current stock. */
+bool ash_game_branch_affordable(const ash_game_t *g, uint8_t branch_id);
+/** State-filtered choice list for a tag; emits at most cap ids (cap <= ASHBOX_BRANCH_MAX). */
+uint8_t ash_game_branch_pool(const ash_game_t *g, uint8_t tag, uint8_t *out, uint8_t cap);
 bool ash_game_crisis_pending(const ash_game_t *g);
+/** Escalation band: 0 below 80, 1 = 80-89, 2 = 90-99, 3 = 100. */
+int ash_game_crisis_band(const ash_game_t *g);
+/** Post-clear arc stage: 0 none, 1 A, 2 B, 3 done. */
+int ash_game_arc_stage(const ash_game_t *g);
 bool ash_game_crisis_option_ok(const ash_game_t *g, ash_crisis_opt_t opt);
 uint16_t ash_game_crisis_fortify_cost(const ash_game_t *g);
 bool ash_game_resolve_crisis(ash_game_t *g, ash_crisis_opt_t opt);

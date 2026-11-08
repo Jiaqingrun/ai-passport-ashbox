@@ -24,6 +24,13 @@ static void apply_loot_bias(const ash_game_t *g, uint8_t pid, ash_tier_t tier, a
             (tier == ASH_TIER_DEEP || tier == ASH_TIER_NIGHT))
             *ember = 1;
     }
+    /* G-6: later arcs pay less, so the second run is not a victory lap. */
+    {
+        int stage = ash_game_arc_stage(g);
+        if (stage == 1) *food = (*food * 3 + 2) / 4;
+        else if (stage == 2) *food = (*food * 3 + 2) / 5;
+        if (stage > 0) *parts = (*parts * 3) / 5;
+    }
     if (g->deep_loot_bonus && tier == ASH_TIER_DEEP) {
         *food = (*food * 11 + 5) / 10;
     }
@@ -209,7 +216,7 @@ void ash_game_apply_success_core_loot(ash_game_t *g, ash_report_t *r, uint8_t pi
                                     uint8_t carried_pistol, uint8_t carried_ammo)
 {
     int food = 0, parts = 0, ember = 0;
-    unsigned seed = g->day_key * 17u + g->expedition_total * 13u + (unsigned)load * 7u;
+    unsigned seed = ash_game_roll_seed(g, (unsigned)load * 7u);
     bool has_pack = (pid < ASHBOX_PERSON_MAX && (*ash_game_equip_bp_mut(g, (unsigned)(pid))));
     if (tier == ASH_TIER_SHORT) {
         food = 2 + (int)(seed % 3u);

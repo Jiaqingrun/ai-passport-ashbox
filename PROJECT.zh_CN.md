@@ -191,6 +191,7 @@ QR 项目 ID：`ai-passport-ashbox`。现行工作区：`~/DeepSeek/AI Passport/
 - 技能 `folotoy-ai-passport-publisher`；目标站只 `https://ai-passport.folotoy.cn`；玩法项目 ID `1943` / slug `community-c919dfca`  
 - 对外文案 play-first：标题与简介禁工程词；细则见 [`COMMUNITY_PUBLISH.zh_CN.md`](./docs/ashbox/COMMUNITY_PUBLISH.zh_CN.md)  
 - 商店简介／说明以**现行已批准稿**为基线，只随本版玩法做对应增量修改；更新须带中英 changelog，只写本版改动  
+- 商店配图固定用 `assets/ashbox/promo/` 四张（`01-cover` 作封面，`02-depart`／`03-return`／`04-door` 作附图），每次更新四张全传，不得重新生成或替换  
 - 社区安装／更新会整机清空，对外文案不得承诺保档  
 - 一次性授权用尽后不得硬重试；请用户重新下发官方更新提示  
 

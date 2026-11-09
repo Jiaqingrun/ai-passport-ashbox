@@ -71,7 +71,9 @@ fewer scenes or frames, smaller stage, lossy art, shorter radio PCM.
   copy before cutting it against a buffer.
 - **Gates:** `check_ashbox_copy_layout.py`, `check_ashbox_glossary.py`, `check_ashbox_font_glyphs.py`.
 - Store copy (`description_*` / `instructions_*` / `changelog_*`) is play-first, incremental against
-  the approved baseline — [COMMUNITY_PUBLISH.md](./docs/ashbox/COMMUNITY_PUBLISH.md).
+  the approved baseline. Store artwork is the fixed four illustrations in `assets/ashbox/promo/`
+  (`01-cover` as cover, `02-depart` / `03-return` / `04-door` as extras) — re-upload all four every
+  time, never regenerate or swap them. Details: [COMMUNITY_PUBLISH.md](./docs/ashbox/COMMUNITY_PUBLISH.md).
 
 ## Audits
 

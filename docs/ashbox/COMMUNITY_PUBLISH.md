@@ -36,10 +36,21 @@ Keep (or restore) player-facing wording that covers:
 4. After import, trust the device screen (day / stash / clues). If the web UI reports “written but verify failed” (`RESTORED 3`): check the device first; if progress matches the backup, upgrade Ember firmware (old firmware could mis-report success as `3`). If progress is wrong, re-import `Ember-before-import-…emsave` and keep the original backup.
 5. Same `device_id` only; default confirm focus stays on Cancel.
 
-## Artwork
+## Artwork (fixed set · hard)
 
-- Cover and extras: portrait 3:4; label as illustration, not a live photo.
-- Prefer current promotional stills under `assets/ashbox/promo/` when the creator wants the cinematic set.
+Every update of this play re-uploads the same four illustrations from
+`assets/ashbox/promo/` — the creator's chosen set, not something regenerated per release:
+
+| File | Role |
+| --- | --- |
+| `01-cover.png` | cover |
+| `02-depart.png` | extra image 1 |
+| `03-return.png` | extra image 2 |
+| `04-door.png` | extra image 3 |
+
+All four are portrait 3:4. Label them as illustrations, not live photos. Do not swap,
+regenerate, reorder or drop one of them unless the creator says so in that session; the
+store revision must always carry all four.
 
 ## Firmware
 

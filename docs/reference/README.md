@@ -132,6 +132,10 @@ The engineering rules themselves live under
 - [Keeping a Persistent World Alive on a Three-Key Handheld](jiaqingrun/persistent-world-simulation-on-a-handheld.md) — tick-length-derived growth, soft tech-driven capacity, and four anti-snowball mechanisms that stop recurring swarms from repeatedly resetting a world.
 - [Live Overlays, Redraws and Audio on a No-FPU Handheld](jiaqingrun/live-overlays-and-audio-on-a-handheld.md) — why a full-screen opacity animation stalls the board, a 16 kHz soft-wave audio path, a glyph-coverage gate, and a header that survives billion-scale numbers.
 
+**Application playbooks:**
+
+- [Ember](jiaqingrun/ember/README.md) — an offline post-apocalyptic outpost sim on three keys: timed expeditions with published odds, a five-resource economy, a nightly threat and watch, three investigation lines whose finish turns a meta-story, and deep sleep that keeps the world moving.
+
 ## Adding an experience entry
 
 Each release may produce **one or more** reusable, post-release learnings; each is

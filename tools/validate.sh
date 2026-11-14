@@ -27,8 +27,32 @@ run_ashbox_host_tests() {
         -Imain -Itests/bsp_stubs -Itests/nvs_stubs \
         tests/test_ashbox_game.c tests/nvs_stubs/nvs_host.c \
         main/ashbox_game.c main/ashbox_game_loot.c main/ashbox_content.c main/ashbox_meta.c \
+        main/ashbox_phenom.c \
         -o "${test_dir}/test_ashbox_game"
     "${test_dir}/test_ashbox_game"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_ashbox_m1.c main/ashbox_ambience.c main/ashbox_digest_logic.c \
+        -o "${test_dir}/test_ashbox_m1"
+    "${test_dir}/test_ashbox_m1"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_ashbox_phenom.c main/ashbox_phenom.c \
+        -o "${test_dir}/test_ashbox_phenom"
+    "${test_dir}/test_ashbox_phenom"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain -Itests/bsp_stubs \
+        tests/test_ashbox_codex.c main/ashbox_codex.c main/ashbox_game.c \
+        main/ashbox_game_loot.c main/ashbox_content.c main/ashbox_phenom.c \
+        -o "${test_dir}/test_ashbox_codex"
+    "${test_dir}/test_ashbox_codex"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain -Itests/bsp_stubs \
+        tests/test_ashbox_talk.c main/ashbox_talk.c main/ashbox_game.c \
+        main/ashbox_game_loot.c main/ashbox_content.c main/ashbox_phenom.c \
+        -o "${test_dir}/test_ashbox_talk"
+    "${test_dir}/test_ashbox_talk"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain -Itests/bsp_stubs \
+        tests/test_ashbox_radio.c main/ashbox_radio.c main/ashbox_game.c \
+        main/ashbox_game_loot.c main/ashbox_content.c main/ashbox_phenom.c \
+        -o "${test_dir}/test_ashbox_radio"
+    "${test_dir}/test_ashbox_radio"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_ashbox_embackup.c main/ashbox_embackup_proto.c \
         -o "${test_dir}/test_ashbox_embackup"
@@ -37,7 +61,7 @@ run_ashbox_host_tests() {
         -Imain -Itests/bsp_stubs -Itests/nvs_stubs \
         tests/test_ashbox_save.c tests/nvs_stubs/nvs_host.c \
         main/ashbox_save.c main/ashbox_game.c main/ashbox_game_loot.c \
-        main/ashbox_content.c main/ashbox_meta.c \
+        main/ashbox_content.c main/ashbox_meta.c main/ashbox_phenom.c \
         -o "${test_dir}/test_ashbox_save"
     "${test_dir}/test_ashbox_save"
     rm -rf "${test_dir}"

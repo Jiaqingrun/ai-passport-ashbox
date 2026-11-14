@@ -1,6 +1,14 @@
 #include "ashbox_ui.h"
 #include "ashbox_help_copy.h"
 
+#include "ashbox_ambience.h"
+#include "ashbox_digest.h"
+#include "ashbox_phenom.h"
+#include "ashbox_codex.h"
+#include "ashbox_talk.h"
+#include "ashbox_radio.h"
+#include "ashbox_stage.h"
+
 #include "ashbox_content.h"
 #include "ashbox_embackup.h"
 #include "ashbox_meta.h"
@@ -37,6 +45,14 @@
 
 LV_FONT_DECLARE(ashbox_font_16);
 
+/* Now-band rows (also used by refresh_home_res before the chrome block). */
+#define NOW_ROW_RES 1
+
+/* M1 resource feedback on the now band (used by refresh_home_res). */
+static bool s_res_inited;
+static int s_res_seen[4];
+static int64_t s_bump_until[4];
+
 static const char *TAG = "ash_ui";
 
 /* 末世像素皮 v6：破败但可读 —— 字清楚、锈血仍在 */
@@ -48,11 +64,13 @@ ashbox_meta_t s_meta;
 uint8_t s_surv_pid;
 ash_settings_t s_cfg;
 ui_page_t s_page;
-int s_depart_step; /* 0 tier, 1 person, 2 loadout */
+int s_depart_step; /* 0 tier, 1 person, 2 loadout, 3 stance */
+int s_pick_gear;   /* 0 light, 1 crowbar, 2 pistol */
 ash_tier_t s_pick_tier;
 uint8_t s_pick_person;
 ash_loadout_t s_pick_load;
 static bool s_save_dirty;
+static bool s_meta_dirty;
 /* Set from button callback without LVGL; consumed under runtime+LVGL locks. */
 static volatile bool s_wake_apply_pending;
 static lv_obj_t *s_scr;
@@ -94,7 +112,9 @@ static bool s_block_modal;
 static bool s_wanderer_bell_armed;
 static bool s_wanderer_join_modal; /* 留下前确认：展示本事与加成 */
 static bool s_exile_confirm;
-static bool s_core_confirm; /* super core is one-shot for the whole career */
+static bool s_core_confirm;  /* super core is one-shot for the whole career */
+static bool s_toast_modal;   /* clear/end toast owns the screen until dismissed */
+static bool s_ui_built;      /* build_screen() has run; no widget is usable before it */
 static lv_obj_t *s_home_layer;
 static lv_obj_t *s_list_layer;
 static lv_obj_t *s_scroll_track;
@@ -115,7 +135,7 @@ static void label_set_if(lv_obj_t *l, const char *s);
 static void refresh_home_res(void)
 {
     char b[24];
-    if (!s_g) return;
+    if (!s_g || !s_water) return;
     snprintf(b, sizeof(b), "水%u", (unsigned)ash_game_total_water(s_g));
     label_set_if(s_water, b);
     lv_obj_clear_flag(s_water, LV_OBJ_FLAG_HIDDEN);
@@ -134,6 +154,21 @@ static void refresh_home_res(void)
     label_set_if(s_ember, b);
     lv_obj_clear_flag(s_ember, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_text_color(s_ember, lv_color_hex(s_g->ember >= 3 ? COL_AMBER : COL_TEXT), 0);
+
+    /* M1: brief gold bounce when a resource actually changes (not on first paint). */
+    const int vals[4] = {(int)ash_game_total_water(s_g), (int)ash_game_total_food(s_g),
+                         (int)ash_game_total_parts(s_g), (int)s_g->ember};
+    lv_obj_t *labs[4] = {s_water, s_food, s_parts, s_ember};
+    int64_t now = esp_timer_get_time();
+    for (int i = 0; i < 4; i++) {
+        if (s_res_inited && vals[i] != s_res_seen[i]) {
+            s_bump_until[i] = now + 350000;
+            lv_obj_set_style_text_color(labs[i], lv_color_hex(COL_GOLD), 0);
+            lv_obj_set_y(labs[i], NOW_ROW_RES - 2);
+        }
+        s_res_seen[i] = vals[i];
+    }
+    s_res_inited = true;
 }
 static int64_t s_mono_last_us;
 static int64_t s_settle_accum_us;
@@ -169,6 +204,25 @@ static uint32_t s_day_key_shown = UINT32_MAX;
 static uint32_t s_exp_rem_shown = UINT32_MAX;
 static int s_threat_shown = -1;
 static int s_bat_level_shown = -999;
+
+/* M1 ambience: wall-clock hour is cached by refresh_wall_clock (UTC+8). */
+static int s_local_hour = -1;
+static int s_local_min;
+static bool s_stage_ready;
+static lv_obj_t *s_radio_bar[6];
+static int64_t s_next_bar_ms;
+static uint32_t s_bar_rand = 0x9E3779B9u;
+static bool s_bars_ready;
+static bool s_bars_speak;
+static int64_t s_next_stage_ms;
+
+/* M1 return digest (snapshot read before LVGL; drawn on demand). */
+static lv_obj_t *s_digest;
+static lv_obj_t *s_digest_lines[5];
+static bool s_digest_open;
+static bool s_digest_pending;
+static ash_digest_delta_t s_digest_data;
+
 #define SPRITE_ANIM_PERIOD_US 320000LL
 
 /* 空闲省电：调暗 / 熄屏 / 深睡。时钟用 esp_timer_get_time() 累加，不走 light sleep。 */
@@ -199,6 +253,8 @@ void set_cost_color(lv_obj_t *lab, bool enough);
 void paint_hub_scrollbar(int sel, int count, int view);
 static void set_card_sub_tip(const char *tip);
 static void set_home_hint(const char *base);
+static void maybe_show_digest_locked(void);
+static void ambience_tick_locked(int64_t now_us);
 
 void ashbox_ui_arm_ok_guard_ms(int ms)
 {
@@ -419,9 +475,8 @@ void set_btn(lv_obj_t *btn, lv_obj_t *lab, const char *txt, bool on, bool focus)
 #define BTN_SEC_W 68
 #define BTN_PRI_DUAL_W (240 - BTN_MARGIN * 2 - BTN_GAP - BTN_SEC_W) /* 140 */
 #define BTN_PRI_SOLO_W (240 - BTN_MARGIN * 2)                         /* 216 */
-#define NOW_ROW_RES 1
-#define NOW_ROW_RADIO 17
-#define NOW_ROW_CARD 34
+#define NOW_ROW_RADIO 19
+#define NOW_ROW_CARD 37
 
 static void refresh_home_scroll_line(void)
 {
@@ -474,7 +529,15 @@ static void set_card_sub_tip(const char *tip)
 
 void set_modal_visible(bool on)
 {
-    if (!s_modal) return;
+    if (!s_modal) {
+        /* Before build_screen() there is no modal to hide, but the flags still
+         * gate input; clear them so no page is left blocked forever. */
+        if (!on) {
+            s_block_modal = false;
+            s_toast_modal = false;
+        }
+        return;
+    }
     if (on) {
         lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
         if (s_hint) lv_obj_add_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
@@ -482,6 +545,7 @@ void set_modal_visible(bool on)
         lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
         if (s_hint) lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
         s_block_modal = false;
+        s_toast_modal = false;
     }
 }
 
@@ -622,12 +686,15 @@ static void refresh_wall_clock(void)
          * (water window, wanderer schedule, daily reset) instead of raw UTC. */
         time_t local = t + 8 * 3600;
         if (gmtime_r(&local, &tm) != NULL) {
+            s_local_hour = tm.tm_hour;
+            s_local_min = tm.tm_min;
             snprintf(buf, sizeof(buf), "%02d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
             label_set_if(s_day, buf);
             return;
         }
     }
     s_clock_sec_shown = -1;
+    s_local_hour = -1;
     label_set_if(s_day, "--:--:--");
 }
 
@@ -951,12 +1018,273 @@ void set_bar_dual(bool dual)
 static void paint_home(void);
 static void paint_guide_overlay(void);
 static void paint_hub(void);
+static void paint_plan(void);
+static void paint_phenom(void);
+static void paint_codex(void);
+static void paint_talk(void);
+static void paint_radio(void);
+static void paint_tune(void);
+static void paint_radio_result(void);
+static void paint_codex_list(void);
+static void paint_codex_entry(void);
+static void mark_save_urgent(void);
+static uint8_t s_codex_vol;
 static void paint_duty(void);
 static void advance_guide(void);
 static void skip_guide(void);
 static void enter_page(ui_page_t page);
 
 static void paint_quest(void);
+
+/* ---------------- M1: return digest + ambience ---------------- */
+
+static void build_digest(void)
+{
+    s_digest = lv_obj_create(s_scr);
+    lv_obj_set_size(s_digest, 240, 320);
+    lv_obj_set_pos(s_digest, 0, 0);
+    lv_obj_set_style_bg_color(s_digest, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_digest, 150, 0);
+    lv_obj_set_style_border_width(s_digest, 0, 0);
+    lv_obj_set_style_radius(s_digest, 0, 0);
+    lv_obj_set_style_pad_all(s_digest, 0, 0);
+    lv_obj_clear_flag(s_digest, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(s_digest, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *panel = lv_obj_create(s_digest);
+    lv_obj_set_size(panel, 216, 196);
+    lv_obj_center(panel);
+    style_panel(panel, COL_SURF);
+    lv_obj_set_style_border_color(panel, lv_color_hex(COL_AMBER), 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    static const int y[5] = {10, 36, 64, 88, 112};
+    for (int i = 0; i < 5; i++) {
+        s_digest_lines[i] = mk_label(panel, "", i == 0 ? COL_AMBER : COL_TEXT);
+        lv_obj_set_pos(s_digest_lines[i], 16, y[i]);
+        lv_obj_set_width(s_digest_lines[i], 184);
+        lv_label_set_long_mode(s_digest_lines[i], LV_LABEL_LONG_MODE_CLIP);
+    }
+    lv_obj_t *btn = lv_obj_create(panel);
+    lv_obj_set_size(btn, 150, 26);
+    lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -8);
+    style_panel(btn, COL_AMBER);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *bl = mk_label(btn, "知道了", COL_INK);
+    lv_obj_center(bl);
+    lv_obj_add_flag(s_digest, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void tok_add(char *b, size_t cap, const char *tok)
+{
+    if (!b || !tok || !tok[0]) {
+        return;
+    }
+    size_t n = strlen(b);
+    if (n >= 40) {
+        return; /* ~10 CJK cells: keep the event line inside 184 px */
+    }
+    if (n) {
+        if (n + 4 >= cap) {
+            return;
+        }
+        b[n++] = (char)0xC2;
+        b[n++] = (char)0xB7; /* U+00B7 middle dot */
+        b[n] = '\0';
+    }
+    strncat(b, tok, cap - strlen(b) - 1);
+}
+
+static void digest_fill_locked(void)
+{
+    if (!s_g) {
+        return;
+    }
+    const ash_digest_delta_t *d = &s_digest_data;
+    char b[64];
+
+    lv_label_set_text(s_digest_lines[0], "回来了");
+    if (d->away_s >= 3600) {
+        snprintf(b, sizeof(b), "离开%lld小时%d分", (long long)(d->away_s / 3600),
+                 (int)((d->away_s / 60) % 60));
+    } else {
+        snprintf(b, sizeof(b), "离开%d分", (int)(d->away_s / 60));
+    }
+    lv_label_set_text(s_digest_lines[1], b);
+
+    char r1[64] = "";
+    char t[24];
+    if (d->food) {
+        snprintf(t, sizeof(t), "粮%+d", (int)d->food);
+        tok_add(r1, sizeof(r1), t);
+    }
+    if (d->parts) {
+        snprintf(t, sizeof(t), "件%+d", (int)d->parts);
+        tok_add(r1, sizeof(r1), t);
+    }
+    if (d->water) {
+        snprintf(t, sizeof(t), "水%+d", (int)d->water);
+        tok_add(r1, sizeof(r1), t);
+    }
+    char r2[64] = "";
+    if (d->iron) {
+        snprintf(t, sizeof(t), "铁%+d", (int)d->iron);
+        tok_add(r2, sizeof(r2), t);
+    }
+    if (d->ember) {
+        snprintf(t, sizeof(t), "烬%+d", (int)d->ember);
+        tok_add(r2, sizeof(r2), t);
+    }
+    if (d->threat) {
+        snprintf(t, sizeof(t), "威胁%+d", (int)d->threat);
+        tok_add(r2, sizeof(r2), t);
+    }
+    lv_label_set_text(s_digest_lines[2], r1[0] ? r1 : (r2[0] ? "" : "站里没有变化"));
+    lv_label_set_text(s_digest_lines[3], r2);
+
+    char ev[64] = "";
+    if (s_g->report.pending) {
+        tok_add(ev, sizeof(ev), "战报");
+    }
+    if (ash_game_crisis_pending(s_g)) {
+        tok_add(ev, sizeof(ev), "守夜");
+    }
+    if (ash_game_wanderer_pending(s_g)) {
+        tok_add(ev, sizeof(ev), "门外");
+    }
+    int farm = ash_game_farm_ready_count(s_g);
+    if (farm > 0) {
+        snprintf(t, sizeof(t), "可收%d", farm);
+        tok_add(ev, sizeof(ev), t);
+    }
+    if (ash_game_stash_full(s_g)) {
+        tok_add(ev, sizeof(ev), "仓满");
+    }
+    if (ash_game_duty_left(s_g) > 0) {
+        snprintf(t, sizeof(t), "日勤%d", (int)ash_game_duty_left(s_g));
+        tok_add(ev, sizeof(ev), t);
+    }
+    lv_label_set_text(s_digest_lines[4], ev[0] ? ev : "接着守火");
+}
+
+static void digest_show_locked(void)
+{
+    s_digest_pending = false;
+    digest_fill_locked();
+    lv_obj_clear_flag(s_digest, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_digest);
+    s_digest_open = true;
+}
+
+static void maybe_show_digest_locked(void)
+{
+    if (!s_digest_pending || s_digest_open || !s_ui_built || !s_digest) {
+        return;
+    }
+    if (s_wake_guard || guide_active()) {
+        return;
+    }
+    digest_show_locked();
+}
+
+static void digest_close_locked(void)
+{
+    if (!s_digest_open) {
+        return;
+    }
+    s_digest_open = false;
+    lv_obj_add_flag(s_digest, LV_OBJ_FLAG_HIDDEN);
+    paint_home();
+}
+
+static void restore_bumps(int64_t now_us)
+{
+    if (!s_g || !s_water) {
+        return;
+    }
+    lv_obj_t *labs[4] = {s_water, s_food, s_parts, s_ember};
+    for (int i = 0; i < 4; i++) {
+        if (s_bump_until[i] == 0 || now_us < s_bump_until[i]) {
+            continue;
+        }
+        s_bump_until[i] = 0;
+        lv_obj_set_y(labs[i], NOW_ROW_RES);
+        uint32_t col = COL_TEXT;
+        if (i == 0 && ash_game_total_water(s_g) == 0) {
+            col = COL_DANGER;
+        } else if (i == 1 && ash_game_total_food(s_g) == 0) {
+            col = COL_DANGER;
+        } else if (i == 3) {
+            col = s_g->ember >= 3 ? COL_AMBER : COL_TEXT;
+        }
+        lv_obj_set_style_text_color(labs[i], lv_color_hex(col), 0);
+    }
+}
+
+static void update_radio_bars(int64_t now_us)
+{
+    if (!s_radio_bar[0]) {
+        return;
+    }
+    int64_t now_ms = now_us / 1000;
+    if (now_ms < s_next_bar_ms) {
+        return;
+    }
+    s_next_bar_ms = now_ms + 120;
+    bool speak = ashbox_sfx_radio_on() && ashbox_sfx_radio_speaking();
+    if (!speak && s_bars_ready && !s_bars_speak) {
+        return; /* already flat; no style churn while the radio is silent */
+    }
+    s_bars_ready = true;
+    s_bars_speak = speak;
+    for (int i = 0; i < 6; i++) {
+        s_bar_rand = s_bar_rand * 1103515245u + 12345u;
+        int h = 2;
+        if (speak) {
+            h = 3 + (int)((s_bar_rand >> 16) % 10u);
+        }
+        lv_obj_set_height(s_radio_bar[i], h);
+        lv_obj_set_y(s_radio_bar[i], 30 - h);
+        lv_obj_set_style_bg_opa(s_radio_bar[i], speak ? 220 : 90, 0);
+    }
+}
+
+static void ambience_tick_locked(int64_t now_us)
+{
+    if (!s_stage_ready || !s_g || !s_ui_built) {
+        return;
+    }
+    int64_t now_ms = now_us / 1000;
+    if (now_ms < s_next_stage_ms) {
+        return;
+    }
+    s_next_stage_ms = now_ms + 100;
+    if (s_local_hour < 0) {
+        refresh_wall_clock();
+    }
+    ashbox_stage_view_t v = {0};
+    v.hour = s_local_hour >= 0 ? s_local_hour : 12;
+    v.minute = s_local_min;
+    v.ember = s_g->ember;
+    v.threat = s_g->threat;
+    const ash_phenom_t *ph = ash_phenom_for_day(s_g->day_key);
+    v.phenom = ph ? ph->name : NULL;
+    v.phenom_danger = ph ? ph->danger : false;
+    v.exp_remaining_s = s_g->exp.remaining_s;
+    v.pop = s_g->pop;
+    v.farm_ready = ash_game_farm_ready_count(s_g);
+    v.duty_left = ash_game_duty_left(s_g);
+    v.exp_active = s_g->exp.active;
+    v.report = s_g->report.pending;
+    v.crisis = ash_game_crisis_pending(s_g);
+    v.wanderer = ash_game_wanderer_pending(s_g);
+    v.stash_full = ash_game_stash_full(s_g);
+    v.radio_on = ashbox_sfx_radio_on();
+    ashbox_stage_update(now_us, &v,
+                        s_pwr == PWR_ACTIVE && s_page == UI_HOME && !s_digest_open);
+    update_radio_bars(now_us);
+    restore_bumps(now_us);
+}
 
 static void go_back(void)
 {
@@ -968,6 +1296,17 @@ static void go_back(void)
                                            : (int)s_pick_load;
         enter_page(UI_PICK);
         paint_pick();
+        return;
+    }
+    if (s_page == UI_LEG) {
+        enter_page(UI_HOME);
+        paint_home();
+        return;
+    }
+    if (s_page == UI_PROJECTS) {
+        s_list_sel = 16;
+        enter_page(UI_BUILD);
+        paint_build();
         return;
     }
     if (s_page == UI_BUILD) {
@@ -986,6 +1325,53 @@ static void go_back(void)
         s_list_sel = 6;
         enter_page(UI_SETTINGS);
         paint_settings();
+        return;
+    }
+    if (s_page == UI_RADIO_RESULT || s_page == UI_TUNE) {
+        enter_page(UI_RADIO);
+        paint_radio();
+        return;
+    }
+    if (s_page == UI_RADIO) {
+        s_list_sel = 5;
+        enter_page(UI_PLAN);
+        paint_plan();
+        return;
+    }
+    if (s_page == UI_TALK) {
+        ash_talk_mark_seen(s_g);
+        mark_save_urgent();
+        s_list_sel = 4;
+        enter_page(UI_PLAN);
+        paint_plan();
+        return;
+    }
+    if (s_page == UI_CODEX_ENTRY) {
+        paint_codex_list();
+        return;
+    }
+    if (s_page == UI_CODEX_LIST) {
+        s_list_sel = s_codex_vol;
+        enter_page(UI_CODEX);
+        paint_codex();
+        return;
+    }
+    if (s_page == UI_CODEX) {
+        s_list_sel = 15;
+        enter_page(UI_HUB);
+        paint_hub();
+        return;
+    }
+    if (s_page == UI_PLAN) {
+        s_list_sel = 14;
+        enter_page(UI_HUB);
+        paint_hub();
+        return;
+    }
+    if (s_page == UI_PHENOM) {
+        s_list_sel = 3;
+        enter_page(UI_PLAN);
+        paint_plan();
         return;
     }
     if (s_page == UI_DUTY || s_page == UI_SETTINGS || s_page == UI_HELP || s_page == UI_QUEST ||
@@ -1058,7 +1444,9 @@ static void paint_home(void)
     refresh_home_res();
     lv_obj_add_flag(s_status, LV_OBJ_FLAG_HIDDEN);
     s_home_status[0] = '\0';
-    if (ash_game_crisis_pending(s_g) || s_g->report.pending || s_g->exp.active) {
+    if (ash_game_leg_waiting(s_g)) {
+        snprintf(s_home_status, sizeof(s_home_status), "远征停住");
+    } else if (ash_game_crisis_pending(s_g) || s_g->report.pending || s_g->exp.active) {
         /* the now card already says what is happening */
     } else if (s_g->pop == 0) {
         snprintf(s_home_status, sizeof(s_home_status), "在等过路客上门");
@@ -1208,6 +1596,9 @@ static void paint_home(void)
         label_set_if(s_modal_lines[4], "");
         label_set_if(lv_obj_get_child(s_modal_btn, 0), "继续");
     }
+
+    /* A pending digest waits for the guide/wake overlay to finish. */
+    maybe_show_digest_locked();
 }
 
 static void paint_guide_overlay(void)
@@ -1268,7 +1659,7 @@ static void skip_guide(void)
 
 
 
-#define HUB_COUNT 14
+#define HUB_COUNT 16
 #define DUTY_COUNT ASHBOX_DUTY_KIND_N
 /* 资源页：仓位说明 + 物资概览 + 按人用药（制作已迁出） */
 #define RES_MED_BASE 2
@@ -1328,12 +1719,13 @@ static void paint_hub(void)
     char buf[64];
     int ready = ash_game_farm_ready_count(s_g);
     const char *names[] = {"日勤", "菜地", "资源", "仓库", "幸存者", "装备", "建设", "交易", "站令",
-                           "线索", "成就", "纪事", "设置", "帮助"};
+                           "线索", "成就", "纪事", "设置", "帮助", "事项", "观测"};
     int top = hub_scroll_top(s_list_sel, HUB_COUNT);
     for (int i = 0; i < HUB_COUNT; i++) {
         lv_obj_add_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
         lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
         lv_obj_set_width(s_list_labels[i], 188);
+        lv_obj_set_height(s_list_labels[i], 18);
         if (i == 0) {
             unsigned left = ash_game_duty_left(s_g);
             if (s_g->exp.active) snprintf(buf, sizeof(buf), "日勤  远征中不可");
@@ -1384,11 +1776,17 @@ static void paint_hub(void)
             for (uint16_t b = 1; b <= ASH_ACH_ALL_MASK; b <<= 1) {
                 if (ashbox_meta_has(&s_meta, b)) got++;
             }
-            snprintf(buf, sizeof(buf), "成就  已获%u/5", got);
+            snprintf(buf, sizeof(buf), "成就  已获%u/%u", got, (unsigned)ASH_ACH_COUNT);
+        } else if (i == 14) {
+            snprintf(buf, sizeof(buf), "事项  远征/战报/夜勤/天时");
+        } else if (i == 15) {
+            snprintf(buf, sizeof(buf), "观测  已记%u/%u",
+                     (unsigned)ash_codex_count(s_g), (unsigned)ASH_CODEX_COUNT);
         } else {
             snprintf(buf, sizeof(buf), "%s", names[i]);
         }
         lv_label_set_text(s_list_labels[i], buf);
+        lv_obj_set_style_text_color(s_list_labels[i], lv_color_hex(COL_TEXT), 0);
         if (i < top || i >= top + HUB_VIEW) {
             lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
             continue;
@@ -1419,7 +1817,460 @@ static void paint_hub(void)
     else lv_label_set_text(s_hint, "每项点进完整一页 · 长按返回");
 }
 
+static void paint_order(void);
+static void paint_crisis(void);
+static void paint_report(void);
 
+/* M2 信息架构：把「远征 / 战报 / 夜间安排 / 天象」收进一页。
+ * Four two-line rows reuse the shared list widgets; no new objects. */
+#define PLAN_ROWS 6
+
+static void paint_plan(void)
+{
+    s_page = UI_PLAN;
+    show_home_chrome(false);
+    lv_label_set_text(s_title, "事项");
+    for (int i = 0; i < PLAN_ROWS; i++) {
+        lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
+        lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_set_width(s_list_labels[i], 196);
+        lv_obj_set_width(s_list_subs[i], 196);
+        lv_obj_set_height(s_list_labels[i], 18);
+        lv_obj_set_size(s_list_rows[i], 216, 36);
+        lv_obj_set_pos(s_list_rows[i], 12, 4 + i * 36);
+        lv_obj_set_pos(s_list_labels[i], 10, 1);
+        lv_obj_set_pos(s_list_subs[i], 10, 17);
+    }
+    for (int i = PLAN_ROWS; i < ASH_LIST_MAX; i++) lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
+
+    char line[64];
+    char sub[72];
+    /* 远征 */
+    if (ash_game_leg_waiting(s_g)) {
+        snprintf(line, sizeof(line), "远征  途中");
+        snprintf(sub, sizeof(sub), "已走%u/%u段 · 继续或收手",
+                 (unsigned)s_g->exp_leg, (unsigned)s_g->exp_leg_total);
+    } else if (ash_game_crisis_pending(s_g)) {
+        snprintf(line, sizeof(line), "远征  守夜");
+        snprintf(sub, sizeof(sub), "危机未处理，先回站");
+    } else if (s_g->report.pending) {
+        snprintf(line, sizeof(line), "远征  待抉择");
+        snprintf(sub, sizeof(sub), "归来还没选");
+    } else if (s_g->exp.active) {
+        snprintf(line, sizeof(line), "远征中");
+        snprintf(sub, sizeof(sub), "回主页可继续走或收手");
+    } else if (ash_game_can_depart(s_g)) {
+        snprintf(line, sizeof(line), "远征  可出发");
+        snprintf(sub, sizeof(sub), "轻装/撬棍/手枪 三档");
+    } else {
+        snprintf(line, sizeof(line), "远征  不可");
+        snprintf(sub, sizeof(sub), "粮/水/人不够，或有人在忙");
+    }
+    lv_label_set_text(s_list_labels[0], line);
+    lv_label_set_text(s_list_subs[0], sub);
+
+    /* 战报 */
+    if (s_g->report.pending) {
+        snprintf(line, sizeof(line), "战报  新");
+        snprintf(sub, sizeof(sub), "查看这次收获");
+    } else {
+        snprintf(line, sizeof(line), "战报  无");
+        snprintf(sub, sizeof(sub), "还没有新战报");
+    }
+    lv_label_set_text(s_list_labels[1], line);
+    lv_label_set_text(s_list_subs[1], sub);
+
+    /* 夜间安排 */
+    if (s_g->night_order == ASH_ORDER_NONE) {
+        snprintf(line, sizeof(line), "夜间  未设");
+        snprintf(sub, sizeof(sub), "深睡按默认站令结算");
+    } else {
+        snprintf(line, sizeof(line), "夜间  %s",
+                 ash_game_order_name((ash_night_order_t)s_g->night_order));
+        snprintf(sub, sizeof(sub), "%s",
+                 ash_game_order_result_line((ash_night_order_t)s_g->night_order));
+    }
+    lv_label_set_text(s_list_labels[2], line);
+    lv_label_set_text(s_list_subs[2], sub);
+
+    /* 天象 */
+    const ash_phenom_t *today = ash_phenom_for_day(s_g->day_key);
+    const ash_phenom_t *tomorrow = ash_phenom_for_day(s_g->day_key + 1);
+    snprintf(line, sizeof(line), "天时  %s", today ? today->name : "空明");
+    snprintf(sub, sizeof(sub), "今天 %s · 明天 %s", today ? today->effect : "",
+             tomorrow ? tomorrow->name : "");
+    lv_label_set_text(s_list_labels[3], line);
+    lv_label_set_text(s_list_subs[3], sub);
+    for (int i = 0; i < 3; i++) {
+        lv_obj_set_style_text_color(s_list_labels[i], lv_color_hex(COL_TEXT), 0);
+    }
+    lv_obj_set_style_text_color(s_list_labels[3],
+                                lv_color_hex(today && today->danger ? COL_DANGER : COL_TEXT), 0);
+
+    /* 夜谈 */
+    if (ash_talk_available(s_g)) {
+        const ash_talk_t *t = ash_talk_pick(s_g);
+        snprintf(line, sizeof(line), "夜谈  有新");
+        snprintf(sub, sizeof(sub), "%s", t ? t->title : "火堆边");
+    } else {
+        snprintf(line, sizeof(line), "夜谈  今晚聊过");
+        snprintf(sub, sizeof(sub), "明晚再来");
+    }
+    lv_label_set_text(s_list_labels[4], line);
+    lv_label_set_text(s_list_subs[4], sub);
+
+    /* 守听 */
+    ash_radio_sync_day(s_g);
+    if (ash_radio_listens(s_g) >= ASH_RADIO_DAILY) {
+        snprintf(line, sizeof(line), "守听  今日听完了");
+        snprintf(sub, sizeof(sub), "明日再来");
+    } else {
+        snprintf(line, sizeof(line), "守听  可听%u次", (unsigned)(ASH_RADIO_DAILY - ash_radio_listens(s_g)));
+        snprintf(sub, sizeof(sub), "%s", ash_radio_window_open(s_local_hour) ? "窗口内 · 清晰度+1" : "窗外 · 只有噪声");
+    }
+    lv_label_set_text(s_list_labels[5], line);
+    lv_label_set_text(s_list_subs[5], sub);
+
+    paint_list_sel(PLAN_ROWS);
+    set_bar_dual(false);
+    set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "进入", true, true);
+    s_focus = 0;
+    lv_label_set_text(s_hint, "上下选择 · 长按返回");
+}
+
+/* M2 天象页：今天/明天/后天三行，免费预览两天。 */
+static void paint_phenom(void)
+{
+    s_page = UI_PHENOM;
+    show_home_chrome(false);
+    lv_label_set_text(s_title, "天时");
+    static const char *k_when[3] = {"今天", "明天", "后天"};
+    for (int i = 0; i < 3; i++) {
+        const ash_phenom_t *p = ash_phenom_for_day(s_g->day_key + (uint32_t)i);
+        char line[64];
+        char sub[80];
+        bool locked = (i == 2 && !ash_game_plan_done(s_g, ASH_PLAN_RADIO));
+        if (locked) {
+            snprintf(line, sizeof(line), "%s  未通广播", k_when[i]);
+            snprintf(sub, sizeof(sub), "修好广播才能预听");
+        } else if (p) {
+            snprintf(line, sizeof(line), "%s  %s%s", k_when[i], p->name,
+                     p->danger ? " · 小心" : "");
+            snprintf(sub, sizeof(sub), "%s · %s", p->effect, p->advice);
+        } else {
+            snprintf(line, sizeof(line), "%s  空明", k_when[i]);
+            snprintf(sub, sizeof(sub), "无增减");
+        }
+        lv_label_set_text(s_list_labels[i], line);
+        lv_label_set_text(s_list_subs[i], sub);
+        lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
+        lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_set_width(s_list_labels[i], 196);
+        lv_obj_set_width(s_list_subs[i], 196);
+        lv_obj_set_height(s_list_labels[i], 18);
+        lv_obj_set_size(s_list_rows[i], 216, 36);
+        lv_obj_set_pos(s_list_rows[i], 12, 4 + i * 36);
+        lv_obj_set_pos(s_list_labels[i], 10, 1);
+        lv_obj_set_pos(s_list_subs[i], 10, 17);
+        lv_obj_set_style_text_color(s_list_labels[i],
+                                    lv_color_hex(p && p->danger ? COL_DANGER : COL_TEXT), 0);
+    }
+    for (int i = 3; i < ASH_LIST_MAX; i++) lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
+    paint_list_sel(3);
+    set_bar_dual(false);
+    set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "返回", true, true);
+    s_focus = 0;
+    lv_label_set_text(s_hint, "坏天时先加固 · 长按返回");
+}
+
+/* M3 观测簿：五卷 → 条目 → 阅读页，全部复用共享列表行。 */
+static void paint_codex(void)
+{
+    s_page = UI_CODEX;
+    show_home_chrome(false);
+    lv_label_set_text(s_title, "观测");
+    uint32_t before = s_g->codex_seen;
+    ash_codex_sweep(s_g);
+    if (s_g->codex_seen != before) mark_save_urgent();
+    uint8_t cn = ash_codex_count(s_g);
+    uint16_t abits = 0;
+    if (cn >= 5) abits |= ASH_ACH_CODEX5;
+    if (cn >= 10) abits |= ASH_ACH_CODEX10;
+    if (abits) {
+        uint16_t neu = ashbox_meta_unlock(&s_meta, abits);
+        if (neu) {
+            s_meta_dirty = true;
+            s_g->achieve_toast_mask |= neu;
+        }
+    }
+    for (int i = 0; i < ASH_CODEX_VOL_COUNT; i++) {
+        char buf[48];
+        snprintf(buf, sizeof(buf), "%s  %u/%u", ash_codex_vol_name((uint8_t)i),
+                 (unsigned)ash_codex_vol_count(s_g, (uint8_t)i),
+                 (unsigned)ASH_CODEX_PER_VOL);
+        lv_obj_add_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
+        lv_obj_set_width(s_list_labels[i], 196);
+        lv_obj_set_height(s_list_labels[i], 18);
+        lv_obj_set_size(s_list_rows[i], 216, 36);
+        lv_obj_set_pos(s_list_rows[i], 12, 8 + i * 38);
+        lv_obj_set_pos(s_list_labels[i], 10, 9);
+        lv_label_set_text(s_list_labels[i], buf);
+        lv_obj_set_style_text_color(s_list_labels[i], lv_color_hex(COL_TEXT), 0);
+        lv_obj_clear_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    for (int i = ASH_CODEX_VOL_COUNT; i < ASH_LIST_MAX; i++) lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
+    uint8_t n = ash_codex_count(s_g);
+    const char *rank = ash_codex_rank(n);
+    char hint[64];
+    if (rank[0]) snprintf(hint, sizeof(hint), "已记 %u/%u · %s · 长按返回",
+                          (unsigned)n, (unsigned)ASH_CODEX_COUNT, rank);
+    else snprintf(hint, sizeof(hint), "已记 %u/%u · 长按返回", (unsigned)n, (unsigned)ASH_CODEX_COUNT);
+    lv_label_set_text(s_hint, hint);
+    paint_list_sel(ASH_CODEX_VOL_COUNT);
+    set_bar_dual(false);
+    set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "进入", true, true);
+    s_focus = 0;
+}
+
+static void paint_codex_list(void)
+{
+    s_page = UI_CODEX_LIST;
+    show_home_chrome(false);
+    lv_label_set_text(s_title, ash_codex_vol_name(s_codex_vol));
+    for (int i = 0; i < ASH_CODEX_PER_VOL; i++) {
+        uint8_t id = (uint8_t)(s_codex_vol * ASH_CODEX_PER_VOL + i);
+        const ash_codex_entry_t *e = ash_codex_entry(id);
+        bool has = ash_codex_has(s_g, id);
+        lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
+        lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_set_width(s_list_labels[i], 196);
+        lv_obj_set_width(s_list_subs[i], 196);
+        lv_obj_set_height(s_list_labels[i], 18);
+        lv_obj_set_size(s_list_rows[i], 216, 36);
+        lv_obj_set_pos(s_list_rows[i], 12, 4 + i * 36);
+        lv_obj_set_pos(s_list_labels[i], 10, 1);
+        lv_obj_set_pos(s_list_subs[i], 10, 17);
+        lv_label_set_text(s_list_labels[i], has && e ? e->title : "???");
+        lv_label_set_text(s_list_subs[i], has && e ? e->source : "尚未记录");
+        lv_obj_set_style_text_color(s_list_labels[i],
+                                    lv_color_hex(has ? COL_TEXT : COL_MUTED), 0);
+        lv_obj_clear_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    for (int i = ASH_CODEX_PER_VOL; i < ASH_LIST_MAX; i++) lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
+    paint_list_sel(ASH_CODEX_PER_VOL);
+    set_bar_dual(false);
+    set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "阅读", true, true);
+    s_focus = 0;
+    lv_label_set_text(s_hint, "读过的条目会留在这里 · 长按返回");
+}
+
+static char s_codex_text[384];
+
+static void paint_codex_entry(void)
+{
+    uint8_t id = (uint8_t)(s_codex_vol * ASH_CODEX_PER_VOL + (uint8_t)s_list_sel);
+    const ash_codex_entry_t *e = ash_codex_entry(id);
+    if (!e || !ash_codex_has(s_g, id)) {
+        paint_codex_list();
+        return;
+    }
+    s_page = UI_CODEX_ENTRY;
+    show_home_chrome(false);
+    lv_label_set_text(s_title, e->title);
+    snprintf(s_codex_text, sizeof(s_codex_text), "%s\n\n%s\n\n发现：%s",
+             e->title, e->body, e->source);
+    lv_obj_add_flag(s_list_subs[0], LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_long_mode(s_list_labels[0], LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(s_list_labels[0], 196);
+    lv_obj_set_height(s_list_labels[0], 190);
+    lv_obj_set_size(s_list_rows[0], 216, 200);
+    lv_obj_set_pos(s_list_rows[0], 12, 8);
+    lv_obj_set_pos(s_list_labels[0], 10, 8);
+    lv_label_set_text(s_list_labels[0], s_codex_text);
+    lv_obj_set_style_text_color(s_list_labels[0], lv_color_hex(COL_TEXT), 0);
+    for (int i = 1; i < ASH_LIST_MAX; i++) lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_list_rows[0], LV_OBJ_FLAG_HIDDEN);
+    paint_list_sel(1);
+    set_bar_dual(false);
+    set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "返回", true, true);
+    s_focus = 0;
+    lv_label_set_text(s_hint, "长按返回 · 上下翻卷");
+}
+
+static const ash_talk_t *s_talk;
+
+/* M3 夜谈：一段三行小戏 + 两个选择；每天一次，选完记日子。 */
+static void paint_talk(void)
+{
+    if (!s_talk) s_talk = ash_talk_pick(s_g);
+    s_page = UI_TALK;
+    show_home_chrome(false);
+    lv_label_set_text(s_title, s_talk ? s_talk->title : "夜谈");
+    lv_obj_add_flag(s_list_subs[0], LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_long_mode(s_list_labels[0], LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(s_list_labels[0], 196);
+    lv_obj_set_height(s_list_labels[0], 124);
+    lv_obj_set_size(s_list_rows[0], 216, 140);
+    lv_obj_set_pos(s_list_rows[0], 12, 4);
+    lv_obj_set_pos(s_list_labels[0], 10, 6);
+    lv_label_set_text(s_list_labels[0], s_talk ? s_talk->body : "");
+    lv_obj_set_style_text_color(s_list_labels[0], lv_color_hex(COL_TEXT), 0);
+    lv_obj_set_style_border_color(s_list_rows[0], lv_color_hex(COL_LINE), 0);
+    lv_obj_set_style_bg_color(s_list_rows[0], lv_color_hex(COL_SURF), 0);
+    lv_obj_clear_flag(s_list_rows[0], LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < 2; i++) {
+        bool sel = (s_list_sel == i);
+        lv_obj_add_flag(s_list_subs[i + 1], LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_long_mode(s_list_labels[i + 1], LV_LABEL_LONG_MODE_CLIP);
+        lv_obj_set_width(s_list_labels[i + 1], 196);
+        lv_obj_set_height(s_list_labels[i + 1], 18);
+        lv_obj_set_size(s_list_rows[i + 1], 216, 36);
+        lv_obj_set_pos(s_list_rows[i + 1], 12, 150 + i * 44);
+        lv_obj_set_pos(s_list_labels[i + 1], 10, 9);
+        lv_label_set_text(s_list_labels[i + 1], s_talk ? s_talk->opt[i].text : "");
+        lv_obj_set_style_text_color(s_list_labels[i + 1], lv_color_hex(COL_TEXT), 0);
+        lv_obj_set_style_border_color(s_list_rows[i + 1],
+                                      lv_color_hex(sel ? COL_AMBER : COL_LINE), 0);
+        lv_obj_set_style_bg_color(s_list_rows[i + 1],
+                                  lv_color_hex(sel ? COL_SEL : COL_SURF), 0);
+        lv_obj_clear_flag(s_list_rows[i + 1], LV_OBJ_FLAG_HIDDEN);
+    }
+    for (int i = 3; i < ASH_LIST_MAX; i++) lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
+    set_bar_dual(false);
+    set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "确定", true, true);
+    s_focus = 0;
+    lv_label_set_text(s_hint, "上下选择 · 长按跳过");
+}
+
+static uint8_t s_radio_band;
+static ash_radio_kind_t s_radio_kind;
+static bool s_radio_failed;
+static bool s_radio_out_window;
+
+static void paint_radio(void)
+{
+    ash_radio_sync_day(s_g);
+    s_page = UI_RADIO;
+    show_home_chrome(false);
+    lv_label_set_text(s_title, "守听");
+    bool win = ash_radio_window_open(s_local_hour);
+    uint8_t left = ash_radio_listens(s_g);
+    for (int i = 0; i < ASH_RADIO_BANDS; i++) {
+        const ash_radio_band_t *b = ash_radio_band((uint8_t)i);
+        char line[48];
+        char sub[56];
+        snprintf(line, sizeof(line), "%s  %s", b->name, b->freq);
+        if (left >= ASH_RADIO_DAILY) {
+            snprintf(sub, sizeof(sub), "清晰%u/3 · 今日听完了",
+                     (unsigned)ash_radio_clarity(s_g, (uint8_t)i));
+        } else {
+            snprintf(sub, sizeof(sub), "清晰%u/3 · 听%u/%u",
+                     (unsigned)ash_radio_clarity(s_g, (uint8_t)i),
+                     (unsigned)left, (unsigned)ASH_RADIO_DAILY);
+        }
+        lv_label_set_text(s_list_labels[i], line);
+        lv_label_set_text(s_list_subs[i], sub);
+        lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_text_color(s_list_labels[i],
+                                    lv_color_hex(left >= ASH_RADIO_DAILY ? COL_MUTED : COL_TEXT), 0);
+        lv_obj_set_size(s_list_rows[i], 216, 42);
+        lv_obj_set_pos(s_list_rows[i], 12, 8 + i * 46);
+        lv_obj_set_pos(s_list_labels[i], 10, 2);
+        lv_obj_set_pos(s_list_subs[i], 10, 22);
+        lv_obj_set_height(s_list_labels[i], 18);
+        lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
+        bool sel = (s_list_sel == i);
+        lv_obj_set_style_border_color(s_list_rows[i],
+                                      lv_color_hex(sel ? COL_AMBER : COL_LINE), 0);
+        lv_obj_set_style_bg_color(s_list_rows[i], lv_color_hex(sel ? COL_SEL : COL_SURF), 0);
+        lv_obj_clear_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    for (int i = ASH_RADIO_BANDS; i < ASH_LIST_MAX; i++) {
+        lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    set_bar_dual(false);
+    set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "调谐", true, true);
+    s_focus = 0;
+    lv_label_set_text(s_hint, win ? "窗口内 · 成功才涨清晰度" : "窗外 · 信号弱，只出噪声");
+}
+
+static void paint_tune(void)
+{
+    s_page = UI_TUNE;
+    show_home_chrome(false);
+    lv_label_set_text(s_title, "调谐");
+    uint8_t target = ash_radio_target((uint16_t)s_g->day_key, s_radio_band);
+    (void)target;
+    for (int i = 0; i < ASH_RADIO_NOTCHES; i++) {
+        uint8_t sig = ash_radio_signal((uint16_t)s_g->day_key, s_radio_band, (uint8_t)i);
+        char bars[5];
+        for (uint8_t k = 0; k < sig && k < 4; k++) bars[k] = '#';
+        bars[sig > 4 ? 4 : sig] = '\0';
+        char line[48];
+        snprintf(line, sizeof(line), "第%d段  %s", i + 1, bars);
+        lv_obj_add_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_list_labels[i], line);
+        lv_obj_set_style_text_color(s_list_labels[i], lv_color_hex(COL_TEXT), 0);
+        lv_obj_set_size(s_list_rows[i], 216, 26);
+        lv_obj_set_pos(s_list_rows[i], 12, 4 + i * 28);
+        lv_obj_set_pos(s_list_labels[i], 10, 3);
+        lv_obj_set_height(s_list_labels[i], 18);
+        lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
+        bool sel = (s_list_sel == i);
+        lv_obj_set_style_border_color(s_list_rows[i],
+                                      lv_color_hex(sel ? COL_AMBER : COL_LINE), 0);
+        lv_obj_set_style_bg_color(s_list_rows[i], lv_color_hex(sel ? COL_SEL : COL_SURF), 0);
+        lv_obj_clear_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    for (int i = ASH_RADIO_NOTCHES; i < ASH_LIST_MAX; i++) {
+        lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    set_bar_dual(false);
+    set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "锁定", true, true);
+    s_focus = 0;
+    lv_label_set_text(s_hint, "上下找最强信号 · OK 锁定");
+}
+
+static void paint_radio_result(void)
+{
+    s_page = UI_RADIO_RESULT;
+    show_home_chrome(false);
+    lv_label_set_text(s_title, "守听");
+    lv_obj_add_flag(s_list_subs[0], LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_long_mode(s_list_labels[0], LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(s_list_labels[0], 196);
+    lv_obj_set_height(s_list_labels[0], 180);
+    lv_obj_set_size(s_list_rows[0], 216, 190);
+    lv_obj_set_pos(s_list_rows[0], 12, 4);
+    lv_obj_set_pos(s_list_labels[0], 10, 6);
+    char text[384];
+    snprintf(text, sizeof(text), "%s\n\n%s\n\n%s",
+             ash_radio_result_title(s_radio_kind),
+             ash_radio_result_body(s_radio_kind),
+             ash_radio_result_effect(s_radio_kind));
+    lv_label_set_text(s_list_labels[0], text);
+    lv_obj_set_style_text_color(s_list_labels[0], lv_color_hex(COL_TEXT), 0);
+    lv_obj_set_style_border_color(s_list_rows[0], lv_color_hex(COL_LINE), 0);
+    lv_obj_set_style_bg_color(s_list_rows[0], lv_color_hex(COL_SURF), 0);
+    for (int i = 1; i < ASH_LIST_MAX; i++) lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
+    set_bar_dual(false);
+    set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "继续", true, true);
+    s_focus = 0;
+    if (s_radio_failed) {
+        lv_label_set_text(s_hint, "没对准 · 今日次数已记");
+    } else if (s_radio_out_window) {
+        lv_label_set_text(s_hint, "窗外 · 清晰度没有涨");
+    } else {
+        char hb[48];
+        snprintf(hb, sizeof(hb), "记下一次守听 · 清晰进度%u/3",
+                 (unsigned)ash_radio_progress(s_g));
+        lv_label_set_text(s_hint, hb);
+    }
+}
 
 static void paint_res(void)
 {
@@ -1527,7 +2378,7 @@ static void paint_order(void)
         lv_label_set_text(s_list_labels[i], line);
         lv_label_set_text(s_list_subs[i], sub);
         lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
-        lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+        lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_DOTS);
         lv_obj_set_width(s_list_labels[i], 196);
         lv_obj_set_width(s_list_subs[i], 196);
         lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
@@ -1580,7 +2431,7 @@ static void paint_journal(void)
             lv_label_set_text(s_list_labels[slot], padded);
             lv_obj_add_flag(s_list_subs[slot], LV_OBJ_FLAG_HIDDEN);
             lv_label_set_long_mode(s_list_labels[slot],
-                                   sel ? LV_LABEL_LONG_MODE_SCROLL_CIRCULAR : LV_LABEL_LONG_MODE_CLIP);
+                                   sel ? LV_LABEL_LONG_MODE_DOTS : LV_LABEL_LONG_MODE_CLIP);
             lv_obj_set_width(s_list_labels[slot], 196);
             lv_obj_set_style_anim_duration(s_list_labels[slot], 8000, LV_PART_MAIN);
             lv_obj_set_size(s_list_rows[slot], 216, 28);
@@ -1614,7 +2465,7 @@ static void paint_quest(void)
         lv_label_set_text(s_list_labels[i], line);
         lv_label_set_text(s_list_subs[i], sub);
         lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
-        lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+        lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_DOTS);
         lv_obj_set_width(s_list_labels[i], 196);
         lv_obj_set_width(s_list_subs[i], 196);
         lv_obj_set_style_anim_duration(s_list_subs[i], 8000, LV_PART_MAIN);
@@ -1694,7 +2545,7 @@ static void paint_report(void)
         if (n > ASHBOX_BRANCH_MAX) n = ASHBOX_BRANCH_MAX;
         for (int i = 0; i < n; i++) {
             uint8_t bid = s_g->report.branch_ids[i];
-            char effect[40];
+            char effect[56];
             snprintf(buf, sizeof(buf), "%s", ash_game_branch_label(bid));
             lv_label_set_text(s_list_labels[i], buf);
             ash_game_branch_effect(bid, effect, sizeof(effect));
@@ -1705,7 +2556,7 @@ static void paint_report(void)
             }
             lv_label_set_text(s_list_subs[i], buf);
             lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
-            lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+            lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_DOTS);
             lv_obj_set_width(s_list_labels[i], 196);
             lv_obj_set_width(s_list_subs[i], 196);
             lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
@@ -1861,6 +2712,10 @@ static void build_screen(void)
     lv_obj_set_pos(s_sprite, 0, 0);
     sprite_show(ASHBOX_SCENE_IDLE, 0);
 
+    /* M1: stage HUD/particles sit above the sprite and below the now band. */
+    ashbox_stage_create(s_home_layer, 240, STAGE_H);
+    s_stage_ready = true;
+
     /* 威胁细条贴精灵底边，几乎不挡画面 */
     s_threat_bar = lv_bar_create(s_home_layer);
     lv_obj_set_size(s_threat_bar, 240, 2);
@@ -1911,9 +2766,25 @@ static void build_screen(void)
     lv_obj_set_pos(rb, 6, NOW_ROW_RADIO);
     s_radio = mk_label(now, "", COL_MUTED);
     lv_obj_set_pos(s_radio, 42, NOW_ROW_RADIO);
-    lv_obj_set_width(s_radio, 190);
-    lv_label_set_long_mode(s_radio, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
-    lv_obj_set_style_anim_duration(s_radio, 9000, LV_PART_MAIN);
+    lv_obj_set_width(s_radio, 168);
+    /* No continuous scroll: a hidden home layer must never keep the display
+     * busy while another page (pick/hub) is on screen. */
+    lv_label_set_long_mode(s_radio, LV_LABEL_LONG_MODE_DOTS);
+    lv_obj_set_height(s_radio, 18);
+
+    /* M1: six tiny bars make the radio audible-on-screen; flat when silent. */
+    for (int i = 0; i < 6; i++) {
+        s_radio_bar[i] = lv_obj_create(now);
+        lv_obj_set_size(s_radio_bar[i], 2, 2);
+        lv_obj_set_pos(s_radio_bar[i], 214 + i * 3, 28);
+        lv_obj_set_style_bg_color(s_radio_bar[i], lv_color_hex(COL_AMBER), 0);
+        lv_obj_set_style_bg_opa(s_radio_bar[i], 90, 0);
+        lv_obj_set_style_border_width(s_radio_bar[i], 0, 0);
+        lv_obj_set_style_radius(s_radio_bar[i], 0, 0);
+        lv_obj_set_style_pad_all(s_radio_bar[i], 0, 0);
+        lv_obj_clear_flag(s_radio_bar[i], LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(s_radio_bar[i], LV_OBJ_FLAG_CLICKABLE);
+    }
 
     lv_obj_t *next_lab = mk_label(now, "此刻", COL_MUTED);
     lv_obj_set_pos(next_lab, 6, NOW_ROW_CARD);
@@ -2002,6 +2873,8 @@ static void build_screen(void)
     s_btn_sec_lab = mk_label(s_btn_sec, "据点", COL_MUTED);
     lv_obj_center(s_btn_sec_lab);
     set_bar_dual(true); /* 统一主/次键尺寸与 y，避免错位 */
+    lv_obj_set_style_bg_color(s_btn_pri, lv_color_hex(COL_GOLD), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(s_btn_sec, lv_color_hex(COL_SEL), LV_STATE_PRESSED);
 
     s_modal = lv_obj_create(s_scr);
     lv_obj_set_size(s_modal, 216, 212);
@@ -2031,7 +2904,10 @@ static void build_screen(void)
     lv_obj_clear_flag(s_modal_btn, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t *ml = mk_label(s_modal_btn, "收下", COL_INK);
     layout_btn_label(s_modal_btn, ml);
+    lv_obj_set_style_bg_color(s_modal_btn, lv_color_hex(COL_GOLD), LV_STATE_PRESSED);
     set_modal_visible(false);
+
+    build_digest();
 
     /* 全局默认字体，避免个别控件回落到无中文的 Montserrat 方框 */
     lv_obj_set_style_text_font(s_scr, F(), 0);
@@ -2046,6 +2922,7 @@ void ashbox_ui_start(ash_game_t *game, bool wake_guard_active)
     s_focus = 0;
     s_list_sel = 0;
     s_page = UI_HOME;
+    s_ui_built = false;
     s_mono_last_us = esp_timer_get_time();
     s_settle_accum_us = 0;
     s_idle_us = 0;
@@ -2076,9 +2953,22 @@ void ashbox_ui_start(ash_game_t *game, bool wake_guard_active)
     }
     ashbox_settings_apply(&s_cfg);
     sample_battery(); /* I2C before first paint */
+    s_res_inited = false;
+    s_digest_open = false;
+    s_digest_pending = false;
+    /* NVS read before the LVGL lock (C-CB1); shown after the first home paint. */
+    {
+        struct timeval tv;
+        if (s_g && gettimeofday(&tv, NULL) == 0 && tv.tv_sec > 0) {
+            s_digest_pending =
+                ashbox_digest_take(s_g, (int64_t)tv.tv_sec, &s_digest_data);
+        }
+    }
     if (!bsp_lvgl_lock(1000)) return;
     build_screen();
+    s_ui_built = true;
     paint_home();
+    maybe_show_digest_locked();
     log_mem_budget("ui_start");
     bsp_lvgl_unlock();
     ESP_LOGI(TAG, "UI ready");
@@ -2096,6 +2986,24 @@ static void mark_save_urgent(void)
     s_save_dirty = true;
     s_nvs_force = true;
 }
+
+void ashbox_ui_mark_save_urgent(void)
+{
+    mark_save_urgent();
+}
+
+void ashbox_ui_after_leg(bool withdrew)
+{
+    if (withdrew && s_g->report.pending) {
+        s_list_sel = -1;
+        enter_page(UI_REPORT);
+        paint_report();
+    } else {
+        enter_page(UI_HOME);
+        paint_home();
+    }
+}
+
 
 /* Caller must hold ashbox_runtime_lock() and must NOT hold bsp_lvgl_lock().
  * mirror=true also refreshes sv2 (urgent / sleep / export); periodic flush stays primary-only. */
@@ -2120,6 +3028,13 @@ static void flush_nvs_runtime_only(bool force)
             s_cfg_dirty = false;
         } else {
             ESP_LOGW(TAG, "settings flush failed");
+        }
+    }
+    if (s_meta_dirty) {
+        if (ashbox_meta_store(&s_meta) == ESP_OK) {
+            s_meta_dirty = false;
+        } else {
+            ESP_LOGW(TAG, "meta flush failed");
         }
     }
     if (!s_g) {
@@ -2156,6 +3071,9 @@ void ashbox_ui_flush_persistent(void)
     if (ashbox_settings_save(&s_cfg) == ESP_OK) {
         s_cfg_dirty = false;
     }
+    if (s_meta_dirty) {
+        if (ashbox_meta_store(&s_meta) == ESP_OK) s_meta_dirty = false;
+    }
     ashbox_runtime_unlock();
 }
 
@@ -2165,7 +3083,10 @@ static void service_wake_apply_locked(void)
     if (!s_wake_apply_pending) return;
     s_wake_apply_pending = false;
     ashbox_settings_apply(&s_cfg);
-    if (s_page == UI_HOME) paint_home();
+    if (s_page == UI_HOME) {
+        paint_home();
+        maybe_show_digest_locked();
+    }
 }
 
 /* 时间推进后标记脏；重要事件立即双写落盘，平时最多 15s 只写主槽（耐磨） */
@@ -2187,6 +3108,9 @@ static void enter_page(ui_page_t page)
 {
     s_page = page;
     set_modal_visible(false);
+    /* A page change must never carry an armed one-shot confirm or a stale toast. */
+    s_core_confirm = false;
+    s_exile_confirm = false;
     /* 仅防「进页瞬间的二次确定」；过长让连按确认像失灵 */
     ashbox_ui_arm_ok_guard_ms(200);
 }
@@ -2309,6 +3233,14 @@ static void activate_pick(void)
         paint_pick();
         return;
     }
+    if (s_depart_step == 2) {
+        s_pick_gear = s_list_sel;
+        s_depart_step = 3;
+        s_list_sel = 0;
+        ashbox_sfx_play(ASH_SFX_CONFIRM);
+        paint_pick();
+        return;
+    }
     {
         uint8_t crow = 0, gun = 0, ammo = 0;
         if (s_list_sel == 1) {
@@ -2325,7 +3257,8 @@ static void activate_pick(void)
                 ammo = 1;
             }
         }
-        if (ash_game_start_expedition_ex(s_g, s_pick_tier, s_pick_person, crow, gun, ammo)) {
+        if (ash_game_start_expedition_stance(s_g, s_pick_tier, s_pick_person, crow, gun, ammo,
+                                             (ash_stance_t)(s_list_sel + 1))) {
             ashbox_sfx_play(ASH_SFX_DEPART);
             mark_save_urgent();
             enter_page(UI_HOME);
@@ -2460,7 +3393,7 @@ static void paint_duty(void)
         lv_label_set_text(s_list_labels[i], line);
         lv_label_set_text(s_list_subs[i], sub);
         lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
-        lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+        lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_DOTS);
         lv_obj_set_width(s_list_labels[i], 196);
         lv_obj_set_width(s_list_subs[i], 196);
         lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
@@ -2611,9 +3544,196 @@ static void activate_hub(void)
         paint_settings();
         return;
     }
+    if (s_list_sel == 14) {
+        s_list_sel = 0;
+        enter_page(UI_PLAN);
+        paint_plan();
+        return;
+    }
+    if (s_list_sel == 15) {
+        s_list_sel = 0;
+        enter_page(UI_CODEX);
+        paint_codex();
+        return;
+    }
     s_list_sel = 0;
     enter_page(UI_HELP);
     paint_help();
+}
+
+static void activate_plan(void)
+{
+    if (ok_guard_blocks()) return;
+    if (s_list_sel == 0) {
+        if (ash_game_leg_waiting(s_g)) {
+            ashbox_sfx_play(ASH_SFX_CONFIRM);
+            s_list_sel = 0;
+            enter_page(UI_LEG);
+            paint_leg();
+        } else if (ash_game_crisis_pending(s_g)) {
+            ashbox_sfx_play(ASH_SFX_CONFIRM);
+            s_list_sel = 0;
+            enter_page(UI_CRISIS);
+            paint_crisis();
+        } else if (s_g->report.pending) {
+            ashbox_sfx_play(ASH_SFX_CONFIRM);
+            s_list_sel = -1;
+            enter_page(UI_REPORT);
+            paint_report();
+        } else if (s_g->exp.active) {
+            ashbox_sfx_play(ASH_SFX_CLICK);
+            enter_page(UI_HOME);
+            paint_home();
+        } else if (ash_game_can_depart(s_g)) {
+            ashbox_sfx_play(ASH_SFX_CONFIRM);
+            s_depart_step = 0;
+            s_list_sel = 0;
+            enter_page(UI_PICK);
+            paint_pick();
+        } else {
+            ashbox_sfx_play(ASH_SFX_WARN);
+            lv_label_set_text(s_hint, "粮/水/人不够，先回主页看看");
+        }
+        return;
+    }
+    if (s_list_sel == 1) {
+        if (s_g->report.pending) {
+            ashbox_sfx_play(ASH_SFX_CONFIRM);
+            s_list_sel = -1;
+            enter_page(UI_REPORT);
+            paint_report();
+        } else {
+            ashbox_sfx_play(ASH_SFX_WARN);
+            lv_label_set_text(s_hint, "还没有新战报");
+        }
+        return;
+    }
+    if (s_list_sel == 2) {
+        ashbox_sfx_play(ASH_SFX_CONFIRM);
+        s_list_sel = (int)s_g->night_order;
+        enter_page(UI_ORDER);
+        paint_order();
+        return;
+    }
+    if (s_list_sel == 3) {
+        ashbox_sfx_play(ASH_SFX_CONFIRM);
+        s_list_sel = 0;
+        enter_page(UI_PHENOM);
+        paint_phenom();
+        return;
+    }
+    if (s_list_sel == 5) {
+        ash_radio_sync_day(s_g);
+        if (!ash_radio_can_listen(s_g)) {
+            ashbox_sfx_play(ASH_SFX_WARN);
+            lv_label_set_text(s_hint, "今日两次守听已经用完");
+            return;
+        }
+        ashbox_sfx_play(ASH_SFX_CONFIRM);
+        s_list_sel = 0;
+        enter_page(UI_RADIO);
+        paint_radio();
+        return;
+    }
+    if (s_list_sel == 4) {
+        if (!ash_talk_available(s_g)) {
+            ashbox_sfx_play(ASH_SFX_WARN);
+            lv_label_set_text(s_hint, "今晚已经聊过了");
+            return;
+        }
+        ashbox_sfx_play(ASH_SFX_CONFIRM);
+        s_talk = ash_talk_pick(s_g);
+        s_list_sel = 0;
+        enter_page(UI_TALK);
+        paint_talk();
+        return;
+    }
+}
+
+static void activate_codex(void)
+{
+    if (ok_guard_blocks()) return;
+    s_codex_vol = (uint8_t)s_list_sel;
+    s_list_sel = 0;
+    enter_page(UI_CODEX_LIST);
+    paint_codex_list();
+}
+
+static void activate_codex_list(void)
+{
+    if (ok_guard_blocks()) return;
+    uint8_t id = (uint8_t)(s_codex_vol * ASH_CODEX_PER_VOL + (uint8_t)s_list_sel);
+    if (!ash_codex_has(s_g, id)) {
+        ashbox_sfx_play(ASH_SFX_WARN);
+        lv_label_set_text(s_hint, "这一条还没记下");
+        return;
+    }
+    paint_codex_entry();
+}
+
+static void activate_talk(void)
+{
+    if (ok_guard_blocks()) return;
+    if (!s_talk || s_list_sel < 0 || s_list_sel > 1) return;
+    ash_talk_apply(s_g, s_talk, (uint8_t)s_list_sel);
+    ash_talk_mark_seen(s_g);
+    uint16_t neu = ashbox_meta_unlock(&s_meta, ASH_ACH_TALK);
+    if (neu) {
+        s_meta_dirty = true;
+        s_g->achieve_toast_mask |= neu;
+    }
+    char logb[ASHBOX_JOURNAL_LEN];
+    snprintf(logb, sizeof(logb), "夜谈 · %s", s_talk->title);
+    ash_game_log(s_g, logb);
+    ashbox_sfx_play(ASH_SFX_CONFIRM);
+    mark_save_urgent();
+    s_list_sel = 4;
+    enter_page(UI_PLAN);
+    paint_plan();
+    lv_label_set_text(s_hint, "夜谈结束 · 明晚再聊");
+}
+
+static void activate_radio_band(void)
+{
+    if (ok_guard_blocks()) return;
+    ash_radio_sync_day(s_g);
+    if (!ash_radio_can_listen(s_g)) {
+        ashbox_sfx_play(ASH_SFX_WARN);
+        lv_label_set_text(s_hint, "今日两次守听已经用完");
+        return;
+    }
+    if (s_list_sel < 0 || s_list_sel >= ASH_RADIO_BANDS) return;
+    ashbox_sfx_play(ASH_SFX_CONFIRM);
+    s_radio_band = (uint8_t)s_list_sel;
+    s_list_sel = 0;
+    enter_page(UI_TUNE);
+    paint_tune();
+}
+
+static void activate_tune(void)
+{
+    if (ok_guard_blocks()) return;
+    if (!ash_radio_can_listen(s_g)) {
+        ashbox_sfx_play(ASH_SFX_WARN);
+        enter_page(UI_RADIO);
+        paint_radio();
+        return;
+    }
+    uint8_t target = ash_radio_target((uint16_t)s_g->day_key, s_radio_band);
+    bool success = (s_list_sel == (int)target);
+    bool in_window = ash_radio_window_open(s_local_hour);
+    ash_radio_mark_listen(s_g, s_radio_band, success, in_window);
+    s_radio_failed = !success;
+    s_radio_out_window = !in_window;
+    s_radio_kind = success ? ash_radio_result_kind(s_g, s_radio_band) : ASH_RADIO_BLANK;
+    ash_radio_apply(s_g, s_radio_kind);
+    char logb[ASHBOX_JOURNAL_LEN];
+    snprintf(logb, sizeof(logb), "守听 · %s", ash_radio_band(s_radio_band)->name);
+    ash_game_log(s_g, logb);
+    ashbox_sfx_play(success ? ASH_SFX_REWARD : ASH_SFX_WARN);
+    mark_save_urgent();
+    enter_page(UI_RADIO_RESULT);
+    paint_radio_result();
 }
 
 static void activate_build(void)
@@ -2665,7 +3785,14 @@ static void activate_build(void)
             s_meta.super_core_consumed = 1;
             (void)ashbox_meta_store(&s_meta);
         }
-    } else if (s_list_sel >= 0 && s_list_sel < 3) ok = ash_game_upgrade(s_g, s_list_sel);
+    } else if (s_list_sel == 15) ok = ash_game_cycle_build_mode(s_g);
+    else if (s_list_sel == 16) {
+        s_list_sel = 0;
+        enter_page(UI_PROJECTS);
+        paint_projects();
+        return;
+    }
+    else if (s_list_sel >= 0 && s_list_sel < 3) ok = ash_game_upgrade(s_g, s_list_sel);
     if (ok) {
         ashbox_sfx_play(ASH_SFX_REWARD);
         mark_save_urgent();
@@ -2909,7 +4036,7 @@ static void maybe_show_meta_toasts(void)
         uint16_t neu = ash_game_eval_clear_achievements(s_g, &s_meta);
         if (s_g->run_cleared && s_g->clear_toast_pending) {
             (void)neu;
-            (void)ashbox_meta_store(&s_meta);
+            s_meta_dirty = true;
             set_modal_visible(true);
             lv_label_set_text(s_modal_lines[0], "三线了结 · 可继续玩");
             lv_label_set_text(s_modal_lines[1], "成就要重新开始后生效");
@@ -2924,7 +4051,12 @@ static void maybe_show_meta_toasts(void)
                 lv_label_set_text(s_modal_lines[2], "");
             }
             lv_label_set_text(s_modal_lines[3], "");
-            lv_label_set_text(s_modal_lines[4], "");
+            lv_label_set_text(s_modal_lines[4], "按确定键关闭");
+            set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "知道了", true, true);
+            /* The toast must own the screen: without this flag the next OK fell
+             * through to the page underneath and the repaint wiped the dialog. */
+            s_block_modal = true;
+            s_toast_modal = true;
             s_g->clear_toast_pending = 0;
             s_g->achieve_toast_mask = 0;
             mark_save_urgent();
@@ -2937,7 +4069,10 @@ static void maybe_show_meta_toasts(void)
         lv_label_set_text(s_modal_lines[1], "可在设置里重新开始");
         lv_label_set_text(s_modal_lines[2], "");
         lv_label_set_text(s_modal_lines[3], "");
-        lv_label_set_text(s_modal_lines[4], "");
+        lv_label_set_text(s_modal_lines[4], "按确定键关闭");
+        set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "知道了", true, true);
+        s_block_modal = true;
+        s_toast_modal = true;
         if (s_g->run_cleared && !s_g->joined_after_clear) {
             uint16_t neu = ashbox_meta_unlock(&s_meta, ASH_ACH_NOBODY);
             if (neu) (void)ashbox_meta_store(&s_meta);
@@ -3046,6 +4181,18 @@ static void on_nav_key(bsp_btn_t btn)
         paint_build();
         return;
     }
+    if (s_page == UI_PROJECTS) {
+        s_list_sel = wrap(s_list_sel, ASH_PLAN_COUNT, dir);
+        ashbox_sfx_play(ASH_SFX_MOVE);
+        paint_projects();
+        return;
+    }
+    if (s_page == UI_LEG) {
+        s_list_sel = wrap(s_list_sel, ASH_LEG_CHOICE_COUNT, dir);
+        ashbox_sfx_play(ASH_SFX_MOVE);
+        paint_leg();
+        return;
+    }
     if (s_page == UI_ORDER) {
         s_list_sel = wrap(s_list_sel, ASH_ORDER_COUNT, dir);
         ashbox_sfx_play(ASH_SFX_MOVE);
@@ -3107,8 +4254,53 @@ static void on_nav_key(bsp_btn_t btn)
         paint_survivor_detail();
         return;
     }
+    if (s_page == UI_TUNE) {
+        s_list_sel = wrap(s_list_sel, ASH_RADIO_NOTCHES, dir);
+        ashbox_sfx_play(ASH_SFX_MOVE);
+        paint_tune();
+        return;
+    }
+    if (s_page == UI_RADIO) {
+        s_list_sel = wrap(s_list_sel, ASH_RADIO_BANDS, dir);
+        ashbox_sfx_play(ASH_SFX_MOVE);
+        paint_radio();
+        return;
+    }
+    if (s_page == UI_TALK) {
+        s_list_sel = wrap(s_list_sel, 2, dir);
+        ashbox_sfx_play(ASH_SFX_MOVE);
+        paint_talk();
+        return;
+    }
+    if (s_page == UI_CODEX) {
+        s_list_sel = wrap(s_list_sel, ASH_CODEX_VOL_COUNT, dir);
+        ashbox_sfx_play(ASH_SFX_MOVE);
+        paint_codex();
+        return;
+    }
+    if (s_page == UI_CODEX_LIST) {
+        s_list_sel = wrap(s_list_sel, ASH_CODEX_PER_VOL, dir);
+        ashbox_sfx_play(ASH_SFX_MOVE);
+        paint_codex_list();
+        return;
+    }
+    if (s_page == UI_CODEX_ENTRY) {
+        return;
+    }
+    if (s_page == UI_PLAN) {
+        s_list_sel = wrap(s_list_sel, PLAN_ROWS, dir);
+        ashbox_sfx_play(ASH_SFX_MOVE);
+        paint_plan();
+        return;
+    }
+    if (s_page == UI_PHENOM) {
+        s_list_sel = wrap(s_list_sel, 3, dir);
+        ashbox_sfx_play(ASH_SFX_MOVE);
+        paint_phenom();
+        return;
+    }
     if (s_page == UI_ACHIEVE) {
-        s_list_sel = wrap(s_list_sel, 5, dir);
+        s_list_sel = wrap(s_list_sel, ASH_ACH_COUNT, dir);
         ashbox_sfx_play(ASH_SFX_MOVE);
         paint_achieve();
         return;
@@ -3172,8 +4364,22 @@ void ashbox_ui_on_key(bsp_btn_t btn, bsp_btn_ev_t ev)
     }
     service_wake_apply_locked();
     power_on_input();
+    if (!s_ui_built) {
+        /* The boot LVGL lock timed out and the widget tree does not exist yet;
+         * every paint path assumes non-NULL widgets, so drop input until built. */
+        goto key_out;
+    }
 
     /* 深睡唤醒静默 / 待入睡：任意新操作（按下）立即结束，恢复声与界面 */
+    if (s_digest_open) {
+        /* The digest owns the first input after a long absence. */
+        if (ev == BSP_BTN_CLICK || ev == BSP_BTN_DOUBLE || ev == BSP_BTN_LONG) {
+            digest_close_locked();
+            ashbox_sfx_play(ASH_SFX_CLICK);
+        }
+        goto key_out;
+    }
+
     if (ev == BSP_BTN_PRESS || ev == BSP_BTN_CLICK || ev == BSP_BTN_DOUBLE) {
         if (s_wake_guard) {
             s_wake_guard = false;
@@ -3232,6 +4438,15 @@ void ashbox_ui_on_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             /* 确认层打开时不睡 */
             goto key_out;
         }
+        if (s_block_modal) {
+            /* Long-press is an escape, never a confirmation. Drop armed one-shots
+             * so a later single OK cannot spend the core or exile anyone. */
+            s_core_confirm = false;
+            s_exile_confirm = false;
+            set_modal_visible(false);
+            ashbox_sfx_play(ASH_SFX_BACK);
+            goto key_out;
+        }
         if (s_page == UI_HOME) {
             if (guide_active()) {
                 skip_guide();
@@ -3246,6 +4461,12 @@ void ashbox_ui_on_key(bsp_btn_t btn, bsp_btn_ev_t ev)
                    s_page == UI_RES || s_page == UI_EQUIP || s_page == UI_FARM ||
                    s_page == UI_TRADE || s_page == UI_DUTY || s_page == UI_SURVIVORS ||
                    s_page == UI_SURVIVOR_DETAIL || s_page == UI_ACHIEVE ||
+                   s_page == UI_PLAN || s_page == UI_PHENOM ||
+                   s_page == UI_CODEX || s_page == UI_CODEX_LIST ||
+                   s_page == UI_CODEX_ENTRY || s_page == UI_TALK ||
+                   s_page == UI_RADIO || s_page == UI_TUNE ||
+                   s_page == UI_RADIO_RESULT || s_page == UI_PROJECTS ||
+                   s_page == UI_LEG ||
                    s_page == UI_RESTART_CONFIRM) {
             go_back();
         } else if (s_page == UI_CRISIS) {
@@ -3288,10 +4509,19 @@ void ashbox_ui_on_key(bsp_btn_t btn, bsp_btn_ev_t ev)
     }
     if (s_block_modal) {
         if (s_core_confirm) {
+            /* The second press is the confirmation, not a cancel: spend the
+             * career one-shot here so "再确定才用" means what it says. */
             s_core_confirm = false;
             s_block_modal = false;
             set_modal_visible(false);
-            ashbox_sfx_play(ASH_SFX_BACK);
+            if (ash_game_use_super_core(s_g)) {
+                s_meta.super_core_consumed = 1;
+                (void)ashbox_meta_store(&s_meta);
+                mark_save_urgent();
+                ashbox_sfx_play(ASH_SFX_REWARD);
+            } else {
+                ashbox_sfx_play(ASH_SFX_WARN);
+            }
             paint_build();
             goto key_out;
         }
@@ -3299,8 +4529,16 @@ void ashbox_ui_on_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             s_exile_confirm = false;
             s_block_modal = false;
             set_modal_visible(false);
-            ashbox_sfx_play(ASH_SFX_BACK);
-            paint_survivor_detail();
+            if (ash_game_exile_person(s_g, s_surv_pid)) {
+                ashbox_sfx_play(ASH_SFX_BACK);
+                mark_save_urgent();
+                s_list_sel = 0;
+                enter_page(UI_SURVIVORS);
+                paint_survivors();
+            } else {
+                ashbox_sfx_play(ASH_SFX_WARN);
+                paint_survivor_detail();
+            }
             goto key_out;
         }
         if (s_page == UI_REPORT && !s_g->report.branch_resolved && !s_report_briefed) {
@@ -3345,6 +4583,28 @@ void ashbox_ui_on_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         activate_survivor_detail();
     } else if (s_page == UI_ACHIEVE) {
         activate_achieve();
+    } else if (s_page == UI_CODEX) {
+        activate_codex();
+    } else if (s_page == UI_CODEX_LIST) {
+        activate_codex_list();
+    } else if (s_page == UI_CODEX_ENTRY) {
+        if (!ok_guard_blocks()) go_back();
+    } else if (s_page == UI_TALK) {
+        activate_talk();
+    } else if (s_page == UI_RADIO) {
+        activate_radio_band();
+    } else if (s_page == UI_TUNE) {
+        activate_tune();
+    } else if (s_page == UI_RADIO_RESULT) {
+        if (!ok_guard_blocks()) go_back();
+    } else if (s_page == UI_PROJECTS) {
+        activate_projects();
+    } else if (s_page == UI_LEG) {
+        activate_leg();
+    } else if (s_page == UI_PLAN) {
+        activate_plan();
+    } else if (s_page == UI_PHENOM) {
+        if (!ok_guard_blocks()) go_back();
     } else if (s_page == UI_RESTART_CONFIRM) {
         activate_restart_confirm();
     } else if (s_page == UI_DUTY) {
@@ -3403,7 +4663,9 @@ void ashbox_ui_tick(void)
         int had_farm_ready = ash_game_farm_ready_count(s_g);
         bool was_exp = s_g->exp.active;
         ash_game_settle(s_g, &clk);
-        maybe_show_meta_toasts();
+        /* Toasts are painted inside the LVGL lock below, after the page repaint:
+         * the old call site wrote LVGL from the app task and was then wiped by
+         * paint_home()'s set_modal_visible(false) in the same tick. */
         /* settle 用单调 dt 推进逻辑；仅在 RTC 仍贴合存档时间轴时回写时钟。
            断电后 RTC 归零时禁止 note_wall_time，否则会把 day_key/日勤打回第 1 天。 */
         {
@@ -3451,7 +4713,17 @@ void ashbox_ui_tick(void)
         /* 熄屏后仍 settle/存档；注意力事件已亮屏则可重绘 */
         if (s_pwr != PWR_BLANK && bsp_lvgl_lock(50)) {
             service_wake_apply_locked();
-            if (s_page == UI_HOME) {
+            if (!s_ui_built) {
+                /* Boot lock timed out in ashbox_ui_start(); build here instead of
+                 * leaving every paint path to dereference NULL widgets. */
+                build_screen();
+                s_ui_built = true;
+                paint_home();
+                maybe_show_digest_locked();
+            } else if (s_toast_modal) {
+                /* The toast owns the screen; a page repaint would hide it again. */
+                refresh_wall_clock();
+            } else if (s_page == UI_HOME) {
                 uint32_t fp = home_ui_fingerprint();
                 if (need_wake || (was_exp && !s_g->exp.active) ||
                     (ash_game_chore_pending(s_g) != had_chore) || fp != s_home_fp) {
@@ -3463,6 +4735,7 @@ void ashbox_ui_tick(void)
             } else {
                 refresh_wall_clock();
             }
+            maybe_show_meta_toasts();
             bsp_lvgl_unlock();
         }
         ashbox_runtime_unlock();
@@ -3473,6 +4746,9 @@ void ashbox_ui_tick(void)
     if (bsp_lvgl_lock(20)) {
         if (s_pwr == PWR_ACTIVE) {
             tick_sprite_anim();
+        }
+        if (s_ui_built && s_page == UI_HOME && s_pwr != PWR_BLANK) {
+            ambience_tick_locked(esp_timer_get_time());
         }
         {
             static ash_em_ui_t s_em_ui_seen = ASH_EM_UI_IDLE;

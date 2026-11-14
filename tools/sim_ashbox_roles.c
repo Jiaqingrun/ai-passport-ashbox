@@ -2,6 +2,7 @@
 #include "ashbox_content.h"
 #include "ashbox_game.h"
 
+#include <assert.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -89,6 +90,48 @@ static void resolve_crisis_safe(ash_game_t *g)
     }
 }
 
+static int g_leg_continues;
+static int g_leg_withdraws;
+
+static int plan_count(const ash_game_t *g)
+{
+    int n = 0;
+    for (int i = 0; i < ASH_PLAN_COUNT; i++) n += ash_game_plan_done(g, (uint8_t)i) ? 1 : 0;
+    return n;
+}
+
+static void spend_plans(ash_game_t *g)
+{
+    static const uint8_t order[] = {
+        ASH_PLAN_ROOF, ASH_PLAN_STOVE, ASH_PLAN_RADIO,
+        ASH_PLAN_CELLAR, ASH_PLAN_WATCH, ASH_PLAN_TANK,
+    };
+    for (size_t i = 0; i < sizeof(order); i++) {
+        uint8_t p = order[i];
+        if (ash_game_plan_done(g, p)) continue;
+        if (g->parts == 0 || g->iron < ash_game_plan_cost_iron(p)) continue;
+        for (int guard = 0; guard < 20 && !ash_game_plan_done(g, p); guard++) {
+            if (!ash_game_plan_contribute(g, p)) break;
+        }
+    }
+}
+
+static void check_invariants(const ash_game_t *g, const char *where)
+{
+    assert(g->food <= ash_game_food_cap(g));
+    assert(g->water <= ash_game_water_cap(g));
+    assert(g->parts <= ASHBOX_PARTS_CAP);
+    assert(g->stash_food <= ash_game_stash_cap(g));
+    assert(g->pop <= ASHBOX_PERSON_MAX);
+    assert(g->threat <= 100);
+    assert(g->exp_leg <= g->exp_leg_total);
+    assert(!g->exp_leg_waiting || g->exp.active);
+    for (int p = 0; p < ASH_PLAN_COUNT; p++) {
+        assert(ash_game_plan_parts(g, (uint8_t)p) <= ash_game_plan_cost_parts((uint8_t)p));
+    }
+    (void)where;
+}
+
 typedef struct {
     const char *name;
     int prefer_deep;   /* 匣主：优先深处/调查 */
@@ -108,6 +151,63 @@ static void milestone(const char *tag, const ash_game_t *g, int64_t t_h)
            g->item[ASH_ITEM_JERKY], g->item[ASH_ITEM_SHARD], g->pop);
 }
 
+static void run_plan_scenario(void)
+{
+    ash_game_t g;
+    ash_game_new(&g);
+    g.parts = 500;
+    g.iron = 100;
+    int beds0 = ash_game_beds(&g);
+    int water0 = ash_game_water_cap(&g);
+    int stash0 = ash_game_stash_cap(&g);
+    spend_plans(&g);
+    assert(plan_count(&g) == ASH_PLAN_COUNT);
+    for (int p = 0; p < ASH_PLAN_COUNT; p++) assert(ash_game_plan_done(&g, (uint8_t)p));
+    assert(ash_game_beds(&g) == beds0 + 1);
+    assert(ash_game_water_cap(&g) == water0 + 20);
+    assert(ash_game_stash_cap(&g) == stash0 + 60);
+    check_invariants(&g, "plans");
+    printf("PLAN PASS: all six plans, beds/water/stash effects\n");
+}
+
+static void run_leg_scenario(void)
+{
+    ash_game_t g;
+    ash_game_new(&g);
+    g.food = 40;
+    g.water = 40;
+    assert(ash_game_start_expedition(&g, ASH_TIER_BLOCK, 0, ASH_LOAD_NONE));
+    assert(g.exp_leg_total == 2);
+    g.exp.remaining_s = g.exp.duration_s / 2u;
+    settle_s(&g, 1);
+    assert(ash_game_leg_waiting(&g));
+    assert(ash_game_leg_continue(&g));
+    g_leg_continues++;
+    assert(g.exp_leg_extra_fail == 8);
+    g.exp.remaining_s = 1;
+    settle_s(&g, 1);
+    assert(!g.exp.active);
+    assert(g.report.pending);
+    check_invariants(&g, "legs");
+
+    ash_game_t w;
+    ash_game_new(&w);
+    w.food = 40;
+    w.water = 40;
+    assert(ash_game_start_expedition(&w, ASH_TIER_BLOCK, 0, ASH_LOAD_NONE));
+    w.exp.remaining_s = w.exp.duration_s / 2u;
+    settle_s(&w, 1);
+    assert(ash_game_leg_waiting(&w));
+    assert(ash_game_leg_withdraw(&w));
+    g_leg_withdraws++;
+    assert(!w.exp.active);
+    assert(w.report.pending);
+    assert(!w.report.success || w.report.food_delta >= 0);
+    check_invariants(&w, "withdraw");
+    printf("  withdraw: %s | %s\n", w.report.lines[0], w.report.lines[1]);
+    printf("LEG PASS: pause/continue/extra-fail/withdraw report\n");
+}
+
 static void run_role(const role_t *role)
 {
     ash_game_t g;
@@ -123,6 +223,7 @@ static void run_role(const role_t *role)
         resolve_crisis_safe(&g);
         spend_upgrades(&g, role->rush_kitchen);
         farm_and_trade(&g);
+        check_invariants(&g, "step");
 
         if (!g.gate_unlocked && g.ember >= 3) {
             (void)ash_game_unlock_gate(&g);
@@ -173,6 +274,10 @@ static void run_role(const role_t *role)
             uint32_t dur = g.exp.remaining_s;
             uint32_t chunk = 30;
             while (g.exp.active && g.exp.remaining_s > 0) {
+                if (ash_game_leg_waiting(&g)) {
+                    assert(ash_game_leg_continue(&g));
+                    g_leg_continues++;
+                }
                 uint32_t step_s = chunk;
                 if (step_s > g.exp.remaining_s) step_s = g.exp.remaining_s;
                 settle_s(&g, (int64_t)step_s);
@@ -198,7 +303,10 @@ static void run_role(const role_t *role)
             milestone("72h_check", &g, t / 3600);
         }
     }
+    check_invariants(&g, "end");
     milestone("end", &g, t / 3600);
+    printf("  plans=%d legs+%d withdraw=%d\n", plan_count(&g), g_leg_continues,
+           g_leg_withdraws);
     printf("  nudge: %s\n", ash_game_home_nudge(&g));
     printf("  radio: %s\n", ash_game_radio(&g));
 }
@@ -207,7 +315,10 @@ int main(void)
 {
     role_t a = {.name = "匣主·调查优先", .prefer_deep = 1, .prefer_hunt = 0, .rush_kitchen = 1};
     role_t b = {.name = "猎径·吞吐优先", .prefer_deep = 0, .prefer_hunt = 1, .rush_kitchen = 1};
+    run_plan_scenario();
+    run_leg_scenario();
     run_role(&a);
     run_role(&b);
+    printf("\nSIM PASS: 96h x 2 roles, invariants and leg boundaries held\n");
     return 0;
 }

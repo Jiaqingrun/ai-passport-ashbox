@@ -1,6 +1,7 @@
 #include "ashbox_content.h"
 #include "ashbox_game.h"
 #include "ashbox_meta.h"
+#include "ashbox_phenom.h"
 #include "ashbox_save.h"
 
 #include <assert.h>
@@ -109,12 +110,14 @@ static void test_crisis_bands_and_breach(void)
     assert(g.crisis.reserved == 6);  /* grace window armed */
     assert(!g.crisis.pending);
 
-    /* Rise is suspended while the window lasts. */
+    /* Rise is suspended while the window lasts. Anchor on an hour boundary so the
+     * window burns down by real hours even when each settle is under an hour. */
+    g.last_settle_unix = (g.last_settle_unix / 3600) * 3600;
     ash_game_settle(&g, &(ash_clock_info_t){.trusted = true, .dt_s = 1800});
     uint8_t after_half = g.threat;
     ash_game_settle(&g, &(ash_clock_info_t){.trusted = true, .dt_s = 1800});
     assert(g.threat == after_half);
-    assert(g.crisis.reserved == 6); /* the window counts whole hours */
+    assert(g.crisis.reserved == 5); /* one real hour crossed */
 
     /* Grace expires and threat moves again. */
     uint8_t before_long = g.threat;
@@ -173,6 +176,46 @@ static void test_depart_preview_matches_roll(void)
     assert(ash_game_depart_fail_pct(&g, ASH_TIER_BLOCK, 0, 0, 0) == 15);
 }
 
+static void test_stance_preview_and_start(void)
+{
+    ash_game_t g;
+    new_game(&g);
+    g.person[0].trust = 0;
+    g.person[0].fatigue = 0;
+    unsigned base = ash_game_depart_fail_pct(&g, ASH_TIER_BLOCK, 0, 0, 0);
+    unsigned steady = ash_game_depart_fail_pct_stance(&g, ASH_TIER_BLOCK, 0, 0, 0,
+                                                      ASH_STANCE_STEADY);
+    unsigned fast = ash_game_depart_fail_pct_stance(&g, ASH_TIER_BLOCK, 0, 0, 0,
+                                                    ASH_STANCE_FAST);
+    unsigned greedy = ash_game_depart_fail_pct_stance(&g, ASH_TIER_BLOCK, 0, 0, 0,
+                                                      ASH_STANCE_GREEDY);
+    assert(base == 7);
+    assert(steady < base);
+    assert(greedy > base);
+    assert(fast >= base);
+    assert(strcmp(ash_game_stance_name(ASH_STANCE_GREEDY), "贪走") == 0);
+
+    ash_game_t a;
+    new_game(&a);
+    uint32_t full = ash_game_tier_duration(ASH_TIER_SHORT);
+    assert(ash_game_start_expedition_stance(&a, ASH_TIER_SHORT, 0, 0, 0, 0,
+                                            ASH_STANCE_FAST));
+    assert(a.exp.loadout == (ash_loadout_t)ASH_STANCE_FAST);
+    assert(a.exp.duration_s == full * 85u / 100u);
+
+    ash_game_t b;
+    new_game(&b);
+    assert(ash_game_start_expedition_stance(&b, ASH_TIER_SHORT, 0, 0, 0, 0,
+                                            ASH_STANCE_STEADY));
+    assert(b.exp.loadout == (ash_loadout_t)ASH_STANCE_STEADY);
+    assert(b.exp.duration_s == full);
+
+    ash_game_t c;
+    new_game(&c);
+    assert(ash_game_start_expedition_ex(&c, ASH_TIER_SHORT, 0, 0, 0, 0));
+    assert(c.exp.loadout == (ash_loadout_t)ASH_STANCE_NONE);
+}
+
 /* Audit: the fortify price shown, checked and deducted must be the same number. */
 static void test_crisis_fortify_cost_banded(void)
 {
@@ -204,6 +247,7 @@ static void test_armed_trip_spends_one_round(void)
     g.ammo = 2;
     assert(ash_game_start_expedition_ex(&g, ASH_TIER_SHORT, 0, 0, 1, 1));
     assert(g.ammo == 1); /* deducted at departure */
+    g.exp_leg_total = 1;
     g.exp.remaining_s = 1;
     ash_game_settle(&g, &(ash_clock_info_t){.trusted = true, .dt_s = 2});
     assert(!g.report.pending || g.report.branch_count >= 0);
@@ -261,6 +305,7 @@ static void test_water_system(void)
     assert(g.water == 0);
 
     /* First expedition completion grants shovel. */
+    g.exp_leg_total = 1;
     g.exp.remaining_s = 1;
     settle_s(&g, 1);
     assert(g.report.pending);
@@ -278,16 +323,17 @@ static void test_water_system(void)
     g.water = 40; /* cushion station thirst so production is visible */
     g.stash_water = 0;
     {
-        int64_t day = (1650000000LL / 86400LL) * 86400LL;
-        g.last_settle_unix = day + 2 * 3600;
+        /* Water budget rolls at local (UTC+8) midnight, like every other day key. */
+        int64_t local_mid = (1650000000LL / 86400LL) * 86400LL - 8 * 3600;
+        g.last_settle_unix = local_mid + 2 * 3600; /* 02:00 local */
     }
     assert(ash_game_build_pit(&g));
     assert(g.well_lv == ASHBOX_WELL_LV_PIT);
     uint16_t before = (uint16_t)(g.water + g.stash_water);
-    settle_s(&g, 3600 * 10); /* 10h < day cap 12; thirst uses 5 */
-    /* Counter tracks whole hours since UTC midnight: 02:00 seed (2) + 10 h. */
+    settle_s(&g, 3600 * 10); /* 10h < day cap 15; thirst 02:00-12:00 = 5 h → 2 */
+    /* Counter tracks whole hours since local midnight: 02:00 seed (2) + 10 h. */
     assert(g.water_made_today == 12);
-    assert((uint16_t)(g.water + g.stash_water) == (uint16_t)(before + 10 - 5));
+    assert((uint16_t)(g.water + g.stash_water) == (uint16_t)(before + 10 - 2));
 
     /* Well upgrade pauses well only; station stays usable. */
     new_game(&g);
@@ -328,21 +374,109 @@ static void test_water_awake_ticks(void)
     g.water = 50; /* cap 50: count production via the daily counter, not the tank */
     g.stash_water = 0;
     int64_t day = (1650000000LL / 86400LL) * 86400LL;
-    g.last_settle_unix = day + 1 * 3600; /* 01:00 UTC, one hour of head room */
+    int64_t local_mid = day - 8 * 3600;
+    g.last_settle_unix = local_mid + 1 * 3600; /* 01:00 local, one hour of head room */
     g.water_made_today = 6 * 3600 / 3600; /* seeded as if the well existed since 00:00 */
     for (int i = 0; i < 3600; i++) settle_s(&g, 1);
-    assert(g.water_made_today == 12); /* 02:00 -> 12:00 would be the cap; 6/h over 1 h */
+    assert(g.water_made_today == 12); /* 02:00 -> 6/h over 1 h */
     assert(g.water_made_today <= ASHBOX_WELL_WATER_DAY_CAP);
 
     /* Midnight wraps the counter instead of stalling it. */
     new_game(&g);
     g.well_lv = ASHBOX_WELL_LV_WELL;
     g.water = 10;
-    g.last_settle_unix = day + 86390; /* 23:59:50 UTC */
+    g.last_settle_unix = local_mid + 86390; /* 23:59:50 local */
     g.water_made_today = 0;
-    settle_s(&g, 7200); /* crosses UTC midnight, lands at 01:59:50 */
+    settle_s(&g, 7200); /* crosses local midnight, lands at 01:59:50 */
     assert(g.water_made_today <= ASHBOX_WELL_WATER_DAY_CAP);
     assert(g.water > 10);
+}
+
+/* Audit 2026-11-12 regressions: trade room, top-band fortify, hour timers,
+ * water-only pocket refill and the water budget's single day boundary. */
+static void test_audit_20261112_regressions(void)
+{
+    int64_t day = (1650000000LL / 86400LL) * 86400LL;
+    int64_t local_mid = day - 8 * 3600;
+
+    /* NV5: a trade whose output pool is full must not be offered at all. */
+    {
+        ash_game_t g;
+        new_game(&g);
+        g.food = 30;
+        g.water = (uint16_t)ash_game_water_cap(&g);
+        g.stash_water = 0;
+        assert(!ash_game_trade_can_pay(&g, ASH_TRADE_FOOD_FOR_WATER));
+        g.water = 0;
+        assert(ash_game_trade_can_pay(&g, ASH_TRADE_FOOD_FOR_WATER));
+
+        g.item[ASH_ITEM_JERKY] = 5;
+        g.item[ASH_ITEM_SEED] = ASHBOX_ITEM_CAP;
+        assert(!ash_game_trade_can_pay(&g, ASH_TRADE_JERKY_FOR_SEED));
+        g.item[ASH_ITEM_SEED] = 0;
+        assert(ash_game_trade_can_pay(&g, ASH_TRADE_JERKY_FOR_SEED));
+    }
+
+    /* NV4: band 3 is a forced fortify failure, so the paid FORTIFY is charged the
+     * fortify cost plus the breach part — but it must say so in the journal
+     * instead of claiming the gate held and then logging the breach. */
+    {
+        ash_game_t g;
+        new_game(&g);
+        g.threat = 100;
+        g.crisis.pending = true;
+        g.parts = 40;
+        g.door_bolt = 1;
+        assert(ash_game_crisis_band(&g) >= 3);
+        uint16_t parts0 = g.parts;
+        uint16_t cost = ash_game_crisis_fortify_cost(&g);
+        assert(ash_game_resolve_crisis(&g, ASH_CRISIS_FORTIFY));
+        assert(g.parts == (uint16_t)(parts0 - cost - 1)); /* fortify + breach part */
+        assert(g.crisis.reserved == 6);                   /* breach window armed */
+        assert(g.door_bolt == 0);                         /* the log says it broke */
+        for (unsigned i = 0; i < ASHBOX_JOURNAL_N; i++) {
+            assert(strstr(g.journal[i], "扛住") == NULL); /* no contradictory line */
+        }
+    }
+
+    /* NV7: hour-based timers must burn down on 1 s awake settles too. */
+    {
+        ash_game_t g;
+        new_game(&g);
+        g.hide_penalty_h = 4;
+        g.last_settle_unix = local_mid + 12 * 3600 + 1800; /* half past the hour */
+        for (int i = 0; i < 3600; i++) settle_s(&g, 1);
+        assert(g.hide_penalty_h == 3);
+    }
+
+    /* NV9: a water-only empty pocket refills from the stash, so the crew is not
+     * forced WEAK and departure stays legal while the stash still holds water. */
+    {
+        ash_game_t g;
+        new_game(&g);
+        g.water = 0;
+        g.stash_water = 20;
+        g.food = 30;
+        g.water_made_today = 0;
+        g.last_settle_unix = local_mid + 12 * 3600;
+        settle_s(&g, 60);
+        assert(g.water > 0);
+        assert(g.person[0].state != ASH_PERSON_WEAK);
+        assert(ash_game_can_depart(&g));
+    }
+
+    /* NV6: the wall-clock resync must not reset the water budget a second time. */
+    {
+        ash_game_t g;
+        new_game(&g);
+        g.well_lv = ASHBOX_WELL_LV_WELL;
+        g.last_settle_unix = local_mid + 12 * 3600;
+        g.water_made_today = 30;
+        uint32_t day0 = g.day_key;
+        ash_game_note_wall_time(&g, local_mid + 86400 + 3600);
+        assert(g.day_key != day0);
+        assert(g.water_made_today == 30);
+    }
 }
 
 /* P0-12/P0-13: auto-join stops at beds, and a wiped-out station is not refilled by a build. */
@@ -473,6 +607,10 @@ static void test_mid_return_excludes_away_production(void)
     g.person[1].state = ASH_PERSON_HEALTHY;
     assert(ash_game_start_expedition(&g, ASH_TIER_BLOCK, 0, ASH_LOAD_NONE));
     g.exp.remaining_s = 1800;
+    settle_s(&g, 1);
+    /* C2 pauses at the 50% leg boundary; choose to keep going. */
+    assert(ash_game_leg_waiting(&g));
+    assert(ash_game_leg_continue(&g));
     settle_s(&g, 3600);
     assert(!g.exp.active);
     assert(g.report.pending);
@@ -659,6 +797,7 @@ static void force_success_depart(ash_game_t *g, ash_tier_t tier)
     g->person[0].fatigue = 0;
     if (tier == ASH_TIER_HUNT) g->gate_unlocked = 1;
     assert(ash_game_start_expedition(g, tier, 0, ASH_LOAD_NONE));
+    g->exp_leg_total = 1; /* loot tests exercise the return, not the leg stop */
     /* 阿禾 + trust3：近路 fail_p=0；废街/深处/猎场仍可能失败，重掷 day_key */
     for (int attempt = 0; attempt < 40; attempt++) {
         g->day_key = (uint32_t)(11 + attempt);
@@ -670,6 +809,7 @@ static void force_success_depart(ash_game_t *g, ash_tier_t tier)
             g->crisis.pending = false;
             if (tier == ASH_TIER_HUNT) g->gate_unlocked = 1;
             assert(ash_game_start_expedition(g, tier, 0, ASH_LOAD_NONE));
+            g->exp_leg_total = 1; /* loot tests exercise the return, not the leg stop */
             g->exp.remaining_s = 1;
         }
         settle_s(g, 1);
@@ -728,6 +868,7 @@ static void test_parts_prob_harder_near(void)
         g.food = 200;
         g.water = 200;
         assert(ash_game_start_expedition(&g, ASH_TIER_SHORT, 0, ASH_LOAD_NONE));
+        g.exp_leg_total = 1;
         g.exp.remaining_s = 1;
         settle_s(&g, 1);
         if (g.report.pending && g.report.success) {
@@ -750,6 +891,7 @@ static void test_parts_prob_harder_near(void)
         g.day_key = 2000u + (unsigned)i * 19u;
         g.expedition_total = (uint32_t)(i + 50);
         assert(ash_game_start_expedition(&g, ASH_TIER_DEEP, 0, ASH_LOAD_NONE));
+        g.exp_leg_total = 1;
         g.exp.remaining_s = 1;
         settle_s(&g, 1);
         if (g.report.pending && g.report.success) {
@@ -816,6 +958,7 @@ static void test_crowbar_haul_distribution_smoke(void)
         g.expedition_total = (uint32_t)(i + 7);
         g.person[0].trust = 3;
         assert(ash_game_start_expedition_ex(&g, ASH_TIER_SHORT, 0, 1, 0, 0));
+        g.exp_leg_total = 1;
         g.exp.remaining_s = 1;
         ash_clock_info_t clk = {.trusted = true, .in_deep_sleep_segment = false, .dt_s = 1};
         ash_game_settle(&g, &clk);
@@ -854,6 +997,7 @@ static void test_backpack_iron_bonus_not_food_double(void)
     assert(ash_game_equip_backpack(&pack, 0, true));
     assert(ash_game_start_expedition_ex(&bare, ASH_TIER_SHORT, 0, 0, 0, 0));
     assert(ash_game_start_expedition_ex(&pack, ASH_TIER_SHORT, 0, 0, 0, 0));
+    bare.exp_leg_total = pack.exp_leg_total = 1;
     bare.exp.remaining_s = pack.exp.remaining_s = 1;
     ash_clock_info_t clk = {.trusted = true, .in_deep_sleep_segment = false, .dt_s = 1};
     ash_game_settle(&bare, &clk);
@@ -881,6 +1025,7 @@ static void test_fatigue_and_trust(void)
     assert(!ash_game_person_can_depart(&g, 0));
     g.person[0].fatigue = 0;
     assert(ash_game_start_expedition(&g, ASH_TIER_SHORT, 0, ASH_LOAD_NONE));
+    g.exp_leg_total = 1;
     g.exp.remaining_s = 1;
     settle_s(&g, 1);
     assert(g.person[0].fatigue > 0);
@@ -918,6 +1063,7 @@ static void test_branch_persists_until_picked(void)
     new_game(&g);
     g.person[0].trust = 3;
     assert(ash_game_start_expedition(&g, ASH_TIER_SHORT, 0, ASH_LOAD_NONE));
+    g.exp_leg_total = 1;
     g.exp.remaining_s = 1;
     settle_s(&g, 1);
     assert(g.report.pending);
@@ -940,6 +1086,7 @@ static void test_loot_deferred_until_ack(void)
     g.parts = 10;
     assert(ash_game_start_expedition(&g, ASH_TIER_SHORT, 0, ASH_LOAD_NONE));
     assert(g.food == 19); /* prepaid short cost 1 */
+    g.exp_leg_total = 1;
     g.exp.remaining_s = 1;
     settle_s(&g, 1);
     assert(g.report.pending);
@@ -989,6 +1136,7 @@ static void test_quest_branch_advance(void)
     new_game(&g);
     g.person[0].trust = 3;
     assert(ash_game_start_expedition(&g, ASH_TIER_SHORT, 0, ASH_LOAD_NONE));
+    g.exp_leg_total = 1;
     g.exp.remaining_s = 1;
     settle_s(&g, 1);
     /* 强制 outcome 带盯铁皮声（id 3） */
@@ -1014,6 +1162,66 @@ static void test_journal_radio(void)
     assert(strstr(away, "测试纪事") == NULL);
 }
 
+static void test_plans_and_legs(void)
+{
+    ash_game_t g;
+    new_game(&g);
+    int beds0 = ash_game_beds(&g);
+    g.parts = 200;
+    g.iron = 40;
+    for (int i = 0; i < 6; i++) assert(ash_game_plan_contribute(&g, ASH_PLAN_ROOF));
+    assert(ash_game_plan_done(&g, ASH_PLAN_ROOF));
+    assert(ash_game_beds(&g) == beds0 + 1);
+    int water0 = ash_game_water_cap(&g);
+    for (int i = 0; i < 11; i++) assert(ash_game_plan_contribute(&g, ASH_PLAN_TANK));
+    assert(ash_game_plan_done(&g, ASH_PLAN_TANK));
+    assert(ash_game_water_cap(&g) == water0 + 20);
+    int stash0 = ash_game_stash_cap(&g);
+    for (int i = 0; i < 12; i++) assert(ash_game_plan_contribute(&g, ASH_PLAN_CELLAR));
+    assert(ash_game_plan_done(&g, ASH_PLAN_CELLAR));
+    assert(ash_game_stash_cap(&g) == stash0 + 60);
+    /* Radio costs iron; completion deducts it. */
+    uint16_t iron0 = g.iron;
+    for (int i = 0; i < 9; i++) assert(ash_game_plan_contribute(&g, ASH_PLAN_RADIO));
+    assert(ash_game_plan_done(&g, ASH_PLAN_RADIO));
+    assert(g.iron == iron0 - 10);
+    /* Full parts but short iron: the plan waits, then completes once iron arrives. */
+    ash_game_t q;
+    new_game(&q);
+    q.parts = 100;
+    q.iron = 0;
+    for (int i = 0; i < 9; i++) assert(ash_game_plan_contribute(&q, ASH_PLAN_WATCH));
+    assert(!ash_game_plan_contribute(&q, ASH_PLAN_WATCH));
+    assert(ash_game_plan_parts(&q, ASH_PLAN_WATCH) == 50);
+    assert(!ash_game_plan_done(&q, ASH_PLAN_WATCH));
+    q.iron = 15;
+    assert(ash_game_plan_contribute(&q, ASH_PLAN_WATCH));
+    assert(ash_game_plan_done(&q, ASH_PLAN_WATCH));
+
+    /* 2-leg block run pauses at the midpoint; continuing adds +8 empty risk. */
+    ash_game_t l;
+    new_game(&l);
+    assert(ash_game_start_expedition(&l, ASH_TIER_BLOCK, 0, ASH_LOAD_NONE));
+    assert(l.exp_leg_total == 2);
+    l.exp.remaining_s = l.exp.duration_s / 2u;
+    settle_s(&l, 1);
+    assert(ash_game_leg_waiting(&l));
+    assert(l.exp_leg == 1);
+    assert(ash_game_leg_continue(&l));
+    assert(!ash_game_leg_waiting(&l));
+    assert(l.exp_leg_extra_fail == 8);
+
+    ash_game_t w;
+    new_game(&w);
+    assert(ash_game_start_expedition(&w, ASH_TIER_BLOCK, 0, ASH_LOAD_NONE));
+    w.exp.remaining_s = w.exp.duration_s / 2u;
+    settle_s(&w, 1);
+    assert(ash_game_leg_waiting(&w));
+    assert(ash_game_leg_withdraw(&w));
+    assert(!w.exp.active);
+    assert(w.report.pending);
+}
+
 static void test_upgrade_cost_api(void)
 {
     ash_game_t g;
@@ -1022,6 +1230,33 @@ static void test_upgrade_cost_api(void)
     assert(ash_game_upgrade(&g, 0));
     assert(g.dorm_lv == 2);
     assert(ash_game_beds(&g) >= 2);
+
+    /* E3: the workshop ladder is 8/16/36/60, separate from dorm/kitchen. */
+    ash_game_t w;
+    new_game(&w);
+    w.parts = 1000;
+    w.build_cap_bonus = 2; /* base max 5 so the full ladder is reachable */
+    static const uint16_t k_ws_costs[] = {8, 16, 36, 60};
+    for (int i = 0; i < 4; i++) {
+        assert(ash_game_upgrade_cost(&w, 2) == k_ws_costs[i]);
+        assert(ash_game_upgrade(&w, 2));
+    }
+    assert(w.workshop_lv == 5);
+    assert(ash_game_upgrade_cost(&w, 2) == 0);
+
+    /* E3: mode cycles normal → steady → hard → normal and defaults to normal. */
+    ash_game_t m;
+    new_game(&m);
+    assert(ash_game_build_mode(&m) == ASH_BUILD_NORMAL);
+    assert(strcmp(ash_game_build_mode_name(ASH_BUILD_NORMAL), "常") == 0);
+    assert(ash_game_cycle_build_mode(&m));
+    assert(ash_game_build_mode(&m) == ASH_BUILD_STEADY);
+    assert(strcmp(ash_game_build_mode_name(ASH_BUILD_STEADY), "稳") == 0);
+    assert(ash_game_cycle_build_mode(&m));
+    assert(ash_game_build_mode(&m) == ASH_BUILD_HARD);
+    assert(strcmp(ash_game_build_mode_name(ASH_BUILD_HARD), "猛") == 0);
+    assert(ash_game_cycle_build_mode(&m));
+    assert(ash_game_build_mode(&m) == ASH_BUILD_NORMAL);
 }
 
 static void test_deep_sleep_economy_half_expedition_full(void)
@@ -1100,6 +1335,7 @@ static void test_return_tag_sets_branches(void)
     g.person[0].trust = 3;
     g.expedition_total = 5; /* 非教程，启用标签分支池 */
     assert(ash_game_start_expedition(&g, ASH_TIER_SHORT, 0, ASH_LOAD_NONE));
+    g.exp_leg_total = 1;
     g.exp.remaining_s = 1;
     settle_s(&g, 1);
     assert(g.report.pending);
@@ -1318,6 +1554,7 @@ static void test_quest1_ember_whisper_step0_reachable(void)
             g.person[0].fatigue = 0;
             assert(ash_game_start_expedition(&g, ASH_TIER_DEEP, 0, ASH_LOAD_NONE));
         }
+        g.exp_leg_total = 1;
         g.exp.remaining_s = 1;
         settle_s(&g, 1);
         if (g.report.pending) {
@@ -1348,6 +1585,7 @@ static void test_quest1_deep_single_step(void)
         g.quest_step[1] = 0;
         g.quest_done[1] = 0;
         assert(ash_game_start_expedition(&g, ASH_TIER_DEEP, 0, ASH_LOAD_NONE));
+        g.exp_leg_total = 1;
         g.exp.remaining_s = 1;
         settle_s(&g, 1);
         if (!(g.report.pending && g.report.success)) continue;
@@ -1369,6 +1607,7 @@ static void test_quest1_deep_single_step(void)
         g.person[0].state = ASH_PERSON_HEALTHY;
         g.person[0].fatigue = 0;
         assert(ash_game_start_expedition(&g, ASH_TIER_DEEP, 0, ASH_LOAD_NONE));
+        g.exp_leg_total = 1;
         g.exp.remaining_s = 1;
         settle_s(&g, 1);
         if (g.report.pending && g.report.success) {
@@ -1704,6 +1943,7 @@ static void test_rare_seed_drop_possible(void)
         g.person[0].trust = 3;
         g.person[0].fatigue = 0;
         assert(ash_game_start_expedition(&g, ASH_TIER_SHORT, 0, ASH_LOAD_NONE));
+        g.exp_leg_total = 1;
         g.exp.remaining_s = 1;
         settle_s(&g, 1);
         if (g.report.pending && g.report.success && g.item[ASH_ITEM_SEED] > 0) got = true;
@@ -1727,6 +1967,7 @@ static void test_ember_pity_block_path(void)
     g.day_key = 42;
     g.ember_dry = (uint8_t)(ASHBOX_EMBER_PITY_BLOCK - 1u);
     assert(ash_game_start_expedition(&g, ASH_TIER_BLOCK, 0, ASH_LOAD_NONE));
+    g.exp_leg_total = 1;
     g.exp.remaining_s = 1;
     /* 强制成功：把 fail 概率绕开——多试 day 直到成功且触发保底 */
     bool got = false;
@@ -1740,6 +1981,7 @@ static void test_ember_pity_block_path(void)
         g.person[0].trust = 3;
         g.person[0].fatigue = 0;
         assert(ash_game_start_expedition(&g, ASH_TIER_BLOCK, 0, ASH_LOAD_NONE));
+        g.exp_leg_total = 1;
         g.exp.remaining_s = 1;
         settle_s(&g, 1);
         if (g.report.pending && g.report.success && g.report.ember_delta > 0) got = true;
@@ -2006,6 +2248,7 @@ static void test_phase_d_block_gate_expectation(void)
             continue;
         }
         trips++;
+        g.exp_leg_total = 1;
         g.exp.remaining_s = 1;
         settle_s(&g, 1);
         if (g.report.pending) {
@@ -2212,6 +2455,7 @@ static void test_gameplay_retune_economy(void)
         g.person[0].trust = 3;
         g.person[0].fatigue = 0;
         if (!ash_game_start_expedition(&g, ASH_TIER_NIGHT, 0, ASH_LOAD_NONE)) continue;
+        g.exp_leg_total = 1;
         g.exp.remaining_s = 1;
         settle_s(&g, 1);
         if (!g.report.pending || !g.report.success) continue;
@@ -2296,12 +2540,96 @@ static void test_meta_clear_duty_super_core(void)
     assert(g.game_over);
 }
 
+static uint32_t day_with_phenom(uint8_t id);
+
+/* Simulated overnight: the modifier applies at the local midnight exactly
+ * once, and a short settle before midnight must not apply it early. */
+static void test_phenom_midnight_once(void)
+{
+    uint32_t target = day_with_phenom(14); /* 灰潮: threat +15 only */
+    ash_game_t g;
+    new_game(&g);
+    g.pop = 1;
+    g.person[0].state = ASH_PERSON_HEALTHY;
+    g.food = 40;
+    g.water = 20;
+    g.threat = 50;
+    g.crisis.reserved = 5; /* freeze the hourly threat rise for this check */
+    g.day_key = target - 1;
+    g.last_settle_unix = (int64_t)(target - 2) * 86400 - 8 * 3600 +
+                         23 * 3600 + 59 * 60 + 30;
+
+    settle_s(&g, 10); /* 23:59:30 -> 23:59:40, no crossing */
+    assert(g.day_key == target - 1);
+    assert(g.threat == 50);
+
+    settle_s(&g, 60); /* -> 00:00:40 on the target day */
+    assert(g.day_key == target);
+    assert(g.threat == 65); /* 50 + 灰潮 15 */
+
+    settle_s(&g, 60); /* same local day: no second application */
+    assert(g.day_key == target);
+    assert(g.threat == 65);
+}
+
+static uint32_t day_with_phenom(uint8_t id)
+{
+    for (uint32_t day = 1; day <= ASH_PHENOM_COUNT; day++) {
+        const ash_phenom_t *p = ash_phenom_for_day(day);
+        if (p && p->id == id) return day;
+    }
+    assert(0 && "phenomenon id missing from the 16-day cycle");
+    return 1;
+}
+
+/* M2: daily weather only moves the resources it names, inside the caps. */
+static void test_phenom_daily_modifier(void)
+{
+    ash_game_t g;
+    new_game(&g);
+    g.water = 10;
+    g.food = 20;
+    g.parts = 5;
+    g.threat = 50;
+
+    ash_game_apply_phenom_day(&g, day_with_phenom(1)); /* 灰雨: 水+3 粮-1 */
+    assert(g.water == 13);
+    assert(g.food == 19);
+    assert(g.parts == 5);
+    assert(g.threat == 50);
+
+    g.water = 10;
+    g.threat = 50;
+    ash_game_apply_phenom_day(&g, day_with_phenom(2)); /* 铁风: 件+2 威胁+6 */
+    assert(g.parts == 7);
+    assert(g.threat == 56);
+
+    g.water = 1;
+    g.threat = 99;
+    ash_game_apply_phenom_day(&g, day_with_phenom(7)); /* 热风: 水-3 威胁+5 */
+    assert(g.water == 0);
+    assert(g.threat == 100);
+
+    g.threat = 50;
+    ash_game_apply_phenom_day(&g, day_with_phenom(14)); /* 灰潮: 威胁+15 */
+    assert(g.threat == 65);
+
+    g.threat = 3;
+    ash_game_apply_phenom_day(&g, day_with_phenom(3)); /* 静夜: 威胁-8 */
+    assert(g.threat == 0);
+
+    /* day 0 (unknown/epoch) must not crash and must still be deterministic. */
+    const ash_phenom_t *p0 = ash_phenom_for_day(0);
+    assert(p0 != NULL);
+}
+
 int main(void)
 {
     test_branch_cost_affordability();
     test_join_respects_beds_and_wipeout();
     test_crisis_empty_station_resolves();
     test_water_awake_ticks();
+    test_audit_20261112_regressions();
     test_new_game();
     test_short_probe_no_daily_cap();
     test_mid_return_excludes_away_production();
@@ -2325,6 +2653,7 @@ int main(void)
     test_quest_branch_advance();
     test_journal_radio();
     test_upgrade_cost_api();
+    test_plans_and_legs();
     test_deep_sleep_economy_half_expedition_full();
     test_night_order_and_gate();
     test_return_tag_sets_branches();
@@ -2361,9 +2690,12 @@ int main(void)
     test_day_latch_survives_low8_wrap();
     test_ember_trade_day0_not_clamped();
     test_crowbar_backpack_cap();
+    test_phenom_midnight_once();
+    test_phenom_daily_modifier();
     test_long_run_no_wrap();
     test_post_clear_arc();
     test_depart_preview_matches_roll();
+    test_stance_preview_and_start();
     test_crisis_fortify_cost_banded();
     test_armed_trip_spends_one_round();
     test_legacy_clear_arms_arc();
@@ -2431,7 +2763,7 @@ int main(void)
 
     /* Keep in sync with ASHBOX_SAVE_BLOB_SIZE in ashbox_save.h */
     assert(sizeof(ash_game_t) == ASHBOX_SAVE_BLOB_SIZE);
-    assert(sizeof(ash_game_t) == 776u);
+    assert(sizeof(ash_game_t) == 816u);
     assert(offsetof(ash_game_t, crc) + sizeof(uint32_t) <= sizeof(ash_game_t));
     assert(offsetof(ash_game_t, iron) == 592u);
     assert(offsetof(ash_game_t, day_latch_trade) == 628u);

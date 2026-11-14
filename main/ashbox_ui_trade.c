@@ -82,31 +82,36 @@ void paint_trade(void)
     if (s_list_sel >= n) s_list_sel = n - 1;
     if (s_list_sel < 0) s_list_sel = 0;
     {
-        char titles[ASH_LIST_MAX][40];
-        char subs[ASH_LIST_MAX][56];
-        bool enough_a[ASH_LIST_MAX];
-        for (int i = 0; i < n; i++) {
-            if (trade_sel_is_tide(i)) {
-                snprintf(titles[i], sizeof(titles[i]), "灰片听潮");
-                snprintf(subs[i], sizeof(subs[i]), "  交2灰片 · 不用出门也能推进  ·  ");
-                enough_a[i] = s_g->item[ASH_ITEM_SHARD] >= 2;
-            } else {
-                ash_trade_t kind = trade_at_sel(i);
-                snprintf(titles[i], sizeof(titles[i]), "%s", ash_game_trade_label(kind));
-                snprintf(subs[i], sizeof(subs[i]), "  %s   ·  ", ash_game_trade_hint(kind));
-                enough_a[i] = ash_game_trade_can_pay(s_g, kind);
-            }
-        }
+        /* Only the visible window is materialised. The real list reaches 22 rows
+         * (13 camp + 8 ferry + 1 tide) while ASH_LIST_MAX is 16, so indexing the
+         * stack arrays by row id overran them once both camps were open. */
+        char titles[TRADE_VIEW][40];
+        char subs[TRADE_VIEW][56];
+        bool enough_a[TRADE_VIEW];
         int view = TRADE_VIEW;
         if (n < view) view = n;
         int top = list_scroll_top(s_list_sel, n, view);
+        for (int slot = 0; slot < view; slot++) {
+            int i = top + slot;
+            if (i >= n) break;
+            if (trade_sel_is_tide(i)) {
+                snprintf(titles[slot], sizeof(titles[slot]), "灰片听潮");
+                snprintf(subs[slot], sizeof(subs[slot]), "  交2灰片 · 不用出门也能推进  ·  ");
+                enough_a[slot] = s_g->item[ASH_ITEM_SHARD] >= 2;
+            } else {
+                ash_trade_t kind = trade_at_sel(i);
+                snprintf(titles[slot], sizeof(titles[slot]), "%s", ash_game_trade_label(kind));
+                snprintf(subs[slot], sizeof(subs[slot]), "  %s   ·  ", ash_game_trade_hint(kind));
+                enough_a[slot] = ash_game_trade_can_pay(s_g, kind);
+            }
+        }
         for (int slot = 0; slot < ASH_LIST_MAX; slot++) lv_obj_add_flag(s_list_rows[slot], LV_OBJ_FLAG_HIDDEN);
         for (int slot = 0; slot < view; slot++) {
             int i = top + slot;
             if (i >= n) break;
-            lv_label_set_text(s_list_labels[slot], titles[i]);
-            lv_label_set_text(s_list_subs[slot], subs[i]);
-            set_cost_color(s_list_subs[slot], enough_a[i]);
+            lv_label_set_text(s_list_labels[slot], titles[slot]);
+            lv_label_set_text(s_list_subs[slot], subs[slot]);
+            set_cost_color(s_list_subs[slot], enough_a[slot]);
             lv_obj_clear_flag(s_list_subs[slot], LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_size(s_list_rows[slot], 216, 36);
             lv_obj_set_pos(s_list_rows[slot], 12, 10 + slot * 40);

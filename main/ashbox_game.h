@@ -21,7 +21,7 @@
 #define ASHBOX_PARTS_CAP 999
 #define ASHBOX_EMBER_CAP 999
 #define ASHBOX_MAGIC 0x48534132u /* ASH2 */
-#define ASHBOX_SAVE_VER 13
+#define ASHBOX_SAVE_VER 17
 #define ASHBOX_BUILD_LV_BASE 3
 #define ASHBOX_JOB_REST 0
 #define ASHBOX_JOB_FARM 1
@@ -404,6 +404,27 @@ typedef struct {
     uint8_t farm_labor_h[ASHBOX_FARM_PLOTS_MAX]; /* hours toward crop bonus */
     /* 6 bytes: seal + keep sizeof multiple of 8 (int64 inside struct). */
     uint8_t pad_v13[6];
+    /* ---- v14 append (before crc) ----
+     * offsetof(codex_seen) == former offsetof(crc) on v13 (772). */
+    uint32_t codex_seen;   /* bit per observation entry (ASH_CODEX_COUNT <= 32) */
+    uint16_t codex_flags;  /* reserved milestones */
+    uint8_t codex_points;  /* 0..ASH_CODEX_COUNT */
+    uint8_t pad_v14;
+    uint16_t talk_day;   /* v15: last local day a night talk was completed */
+    uint16_t sig_day;    /* v15: local day the radio counters were reset for */
+    uint16_t sig_bits;   /* v15: band clarity/resonance/listens/progress */
+    uint16_t pad_v15;
+    /* ---- v16 append (before crc) ---- */
+    uint8_t build_mode;    /* ash_build_mode_t; 0 normal, 1 steady, 2 hard */
+    uint8_t pad_v16[7];
+    /* ---- v17 append (before crc): C2 legs + E1 first six plans ---- */
+    uint8_t exp_leg;          /* completed leg boundaries 0..exp_leg_total-1 */
+    uint8_t exp_leg_total;
+    uint8_t exp_leg_waiting;  /* paused at a boundary, waiting for a choice */
+    uint8_t exp_leg_extra_fail; /* +8 per continue */
+    uint8_t plan_done;        /* bit per plan (6) */
+    uint8_t plan_parts[6];    /* contributed parts toward each plan */
+    uint8_t pad_v17[5];
     uint32_t crc;
 } ash_game_t;
 
@@ -510,6 +531,8 @@ void ash_game_after_migrate(ash_game_t *g); /* clamp + defaults for older saves 
 /** Expand legacy uint8 day latches into v11 uint16 fields (migrators). */
 void ash_game_widen_day_latches(ash_game_t *g);
 void ash_game_settle(ash_game_t *g, const ash_clock_info_t *clk);
+/** Apply one day's weather (M2). Settle calls this once per crossed local midnight. */
+void ash_game_apply_phenom_day(ash_game_t *g, uint32_t day_key);
 /** True when `unix_now` may safely replace the game wall anchor (not a power-loss RTC rewind). */
 bool ash_game_wall_unix_usable(const ash_game_t *g, int64_t unix_now);
 /* Anchor last_settle_unix / day_key to wall clock after a mono-dt settle.
@@ -523,6 +546,58 @@ uint32_t ash_game_roll_seed(const ash_game_t *g, unsigned salt);
 bool ash_game_start_expedition(ash_game_t *g, ash_tier_t tier, uint8_t person_id,
                                ash_loadout_t loadout);
 /* New depart path: food = hours*3; optional crowbar/pistol/ammo carried. */
+/* M4 C2/E1: leg stops and the first six station plans. */
+#define ASH_PLAN_COUNT 6
+typedef enum {
+    ASH_PLAN_ROOF = 0,
+    ASH_PLAN_RADIO,
+    ASH_PLAN_STOVE,
+    ASH_PLAN_CELLAR,
+    ASH_PLAN_WATCH,
+    ASH_PLAN_TANK,
+} ash_plan_id_t;
+
+typedef enum { ASH_LEG_CONTINUE = 0, ASH_LEG_WITHDRAW, ASH_LEG_CHOICE_COUNT } ash_leg_choice_t;
+
+const char *ash_game_plan_name(uint8_t plan);
+const char *ash_game_plan_effect_text(uint8_t plan);
+uint16_t ash_game_plan_cost_parts(uint8_t plan);
+uint16_t ash_game_plan_cost_iron(uint8_t plan);
+uint8_t ash_game_plan_parts(const ash_game_t *g, uint8_t plan);
+bool ash_game_plan_done(const ash_game_t *g, uint8_t plan);
+bool ash_game_plan_contribute(ash_game_t *g, uint8_t plan);
+uint8_t ash_game_exp_legs(const ash_game_t *g);
+bool ash_game_leg_waiting(const ash_game_t *g);
+bool ash_game_leg_continue(ash_game_t *g);
+bool ash_game_leg_withdraw(ash_game_t *g);
+
+/* M4b: workshop strength mode (E3). 0 is normal so pre-v16 saves migrate
+ * with zero extra work and the legacy byte defaults to the old behaviour. */
+typedef enum {
+    ASH_BUILD_NORMAL = 0,
+    ASH_BUILD_STEADY,
+    ASH_BUILD_HARD,
+    ASH_BUILD_COUNT
+} ash_build_mode_t;
+
+/* M4 C1: pre-departure stance. Stored in the legacy exp.loadout byte so the
+ * v15 ABI does not move; stance affects this trip's fail roll, loot and duration. */
+typedef enum {
+    ASH_STANCE_NONE = 0, /* legacy starts: no stance modifiers */
+    ASH_STANCE_STEADY,
+    ASH_STANCE_FAST,
+    ASH_STANCE_GREEDY,
+    ASH_STANCE_COUNT
+} ash_stance_t;
+
+const char *ash_game_stance_name(ash_stance_t stance);
+bool ash_game_start_expedition_stance(ash_game_t *g, ash_tier_t tier, uint8_t person_id,
+                                      uint8_t crowbar_n, uint8_t take_pistol, uint8_t ammo_n,
+                                      ash_stance_t stance);
+unsigned ash_game_depart_fail_pct_stance(const ash_game_t *g, ash_tier_t tier, uint8_t pid,
+                                         uint8_t take_pistol, uint8_t ammo_n,
+                                         ash_stance_t stance);
+
 bool ash_game_start_expedition_ex(ash_game_t *g, ash_tier_t tier, uint8_t person_id,
                                   uint8_t crowbar_n, uint8_t take_pistol, uint8_t ammo_n);
 uint16_t ash_game_expedition_water_cost(ash_tier_t tier);
@@ -609,6 +684,9 @@ int ash_game_station_healthy(const ash_game_t *g);
 int ash_game_beds(const ash_game_t *g);
 int ash_game_food_cap(const ash_game_t *g);
 int ash_game_stash_cap(const ash_game_t *g);
+const char *ash_game_build_mode_name(ash_build_mode_t mode);
+ash_build_mode_t ash_game_build_mode(const ash_game_t *g);
+bool ash_game_cycle_build_mode(ash_game_t *g);
 uint16_t ash_game_upgrade_cost(const ash_game_t *g, int building);
 uint16_t ash_game_stash_upgrade_cost(const ash_game_t *g);
 uint16_t ash_game_furn_upgrade_cost(const ash_game_t *g);

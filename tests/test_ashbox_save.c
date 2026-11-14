@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <string.h>
 
+static void make_sealed(ash_game_t *g, uint16_t food, uint8_t pop, uint32_t day);
+
 static uint32_t crc32_bytes(const uint8_t *data, size_t n)
 {
     uint32_t c = 0xFFFFFFFFu;
@@ -359,8 +361,134 @@ static void test_pad_v13_seals_crc_gap(void)
     assert(sizeof(((ash_game_t *)0)->pad_v12) == 3u);
     assert(offsetof(ash_game_t, pace_era) == offsetof(ash_game_t, pad_v12) + 3u);
     assert(sizeof(((ash_game_t *)0)->pad_v13) == 6u);
-    assert(offsetof(ash_game_t, crc) == offsetof(ash_game_t, pad_v13) + 6u);
+    assert(offsetof(ash_game_t, codex_seen) == offsetof(ash_game_t, pad_v13) + 6u);
+    assert(offsetof(ash_game_t, talk_day) == offsetof(ash_game_t, pad_v14) + 1u);
+    assert(offsetof(ash_game_t, build_mode) == offsetof(ash_game_t, pad_v15) + 2u);
+    assert(offsetof(ash_game_t, exp_leg) == offsetof(ash_game_t, pad_v16) + 7u);
+    assert(offsetof(ash_game_t, crc) == offsetof(ash_game_t, pad_v17) + 5u);
     assert(offsetof(ash_game_t, crc) + sizeof(uint32_t) == sizeof(ash_game_t));
+}
+
+static void test_v13_migrates_to_v14(void)
+{
+    ash_game_t g;
+    make_sealed(&g, 31, 2, 5);
+    g.ver = 13;
+    g.codex_seen = 0;
+    g.codex_flags = 0;
+    g.codex_points = 0;
+    uint8_t blob[776];
+    memcpy(blob, &g, sizeof(blob));
+    seal_legacy(blob, sizeof(blob), 772);
+
+    ash_game_t out;
+    memset(&out, 0, sizeof(out));
+    assert(ashbox_save_decode(blob, sizeof(blob), &out) == ESP_OK);
+    assert(out.ver == ASHBOX_SAVE_VER);
+    assert(out.food == 31 && out.pop == 2 && out.day_key == 5);
+    assert(out.codex_seen == 0 && out.codex_points == 0 && out.pad_v14 == 0);
+    assert(out.talk_day == 0 && out.sig_day == 0 && out.sig_bits == 0 && out.pad_v15 == 0);
+    assert(out.build_mode == ASH_BUILD_NORMAL);
+}
+
+static void test_v14_migrates_to_v15(void)
+{
+    ash_game_t g;
+    make_sealed(&g, 27, 1, 9);
+    g.ver = 14;
+    g.codex_flags = 9; /* v14 stored the talk day here */
+    g.talk_day = 0;
+    g.sig_day = 0;
+    g.sig_bits = 0;
+    uint8_t blob[784];
+    memcpy(blob, &g, sizeof(blob));
+    seal_legacy(blob, sizeof(blob), 780);
+
+    ash_game_t out;
+    memset(&out, 0, sizeof(out));
+    assert(ashbox_save_decode(blob, sizeof(blob), &out) == ESP_OK);
+    assert(out.ver == ASHBOX_SAVE_VER);
+    assert(out.food == 27 && out.pop == 1 && out.day_key == 9);
+    assert(out.talk_day == 9 && out.codex_flags == 0);
+    assert(out.sig_day == 0 && out.sig_bits == 0 && out.pad_v15 == 0);
+    assert(out.build_mode == ASH_BUILD_NORMAL);
+}
+
+static void test_v15_migrates_to_v16(void)
+{
+    ash_game_t g;
+    make_sealed(&g, 29, 2, 11);
+    g.ver = 15;
+    g.build_mode = ASH_BUILD_HARD;
+    g.talk_day = 11;
+    g.sig_day = 11;
+    g.sig_bits = 0x0123;
+    uint8_t blob[792];
+    memcpy(blob, &g, sizeof(blob));
+    seal_legacy(blob, sizeof(blob), 788);
+
+    ash_game_t out;
+    memset(&out, 0, sizeof(out));
+    assert(ashbox_save_decode(blob, sizeof(blob), &out) == ESP_OK);
+    assert(out.ver == ASHBOX_SAVE_VER);
+    assert(out.food == 29 && out.pop == 2 && out.day_key == 11);
+    assert(out.talk_day == 11 && out.sig_day == 11 && out.sig_bits == 0x0123);
+    assert(out.build_mode == ASH_BUILD_NORMAL);
+    for (size_t i = 0; i < sizeof(out.pad_v16); i++) assert(out.pad_v16[i] == 0);
+    assert(out.plan_done == 0 && out.exp_leg_total == 0 && out.exp_leg_waiting == 0);
+}
+
+static void test_v16_migrates_to_v17(void)
+{
+    ash_game_t g;
+    make_sealed(&g, 33, 2, 13);
+    g.ver = 16;
+    g.build_mode = ASH_BUILD_HARD;
+    g.exp_leg = 2;
+    g.exp_leg_total = 3;
+    g.exp_leg_waiting = 1;
+    g.plan_done = 0x3F;
+    g.plan_parts[0] = 30;
+    uint8_t blob[800];
+    memcpy(blob, &g, sizeof(blob));
+    seal_legacy(blob, sizeof(blob), 796);
+
+    ash_game_t out;
+    memset(&out, 0, sizeof(out));
+    assert(ashbox_save_decode(blob, sizeof(blob), &out) == ESP_OK);
+    assert(out.ver == ASHBOX_SAVE_VER);
+    assert(out.food == 33 && out.day_key == 13);
+    assert(out.build_mode == ASH_BUILD_HARD);
+    assert(out.exp_leg_total == 0 && out.exp_leg == 0 && out.exp_leg_waiting == 0);
+    assert(out.plan_done == 0 && out.plan_parts[0] == 0);
+}
+
+static void test_v17_roundtrip_keeps_plans_and_legs(void)
+{
+    ash_game_t g;
+    ash_game_new(&g);
+    g.food = 35;
+    g.plan_done = 0x15; /* roof + stove + watch */
+    g.plan_parts[ASH_PLAN_RADIO] = 27;
+    g.exp.active = true;
+    g.exp.tier = ASH_TIER_BLOCK;
+    g.exp.remaining_s = 900;
+    g.exp_leg = 1;
+    g.exp_leg_total = 2;
+    g.exp_leg_waiting = 1;
+    g.exp_leg_extra_fail = 8;
+    memset(g.pad_v17, 0, sizeof(g.pad_v17));
+    g.crc = ash_game_crc(&g);
+
+    ash_game_t out;
+    memset(&out, 0, sizeof(out));
+    assert(ashbox_save_decode((const uint8_t *)&g, sizeof(g), &out) == ESP_OK);
+    assert(out.ver == ASHBOX_SAVE_VER);
+    assert(out.plan_done == 0x15);
+    assert(out.plan_parts[ASH_PLAN_RADIO] == 27);
+    assert(out.exp_leg == 1 && out.exp_leg_total == 2 && out.exp_leg_waiting == 1);
+    assert(out.exp_leg_extra_fail == 8);
+    assert(ash_game_leg_waiting(&out));
 }
 
 /* Dirty alignment bytes must not reject a logically valid v12 blob. */
@@ -418,6 +546,8 @@ static void make_sealed(ash_game_t *g, uint16_t food, uint8_t pop, uint32_t day)
     memset(g->pad_v12, 0, sizeof(g->pad_v12));
     memset(g->pad_v13, 0, sizeof(g->pad_v13));
     g->pad_v13a = 0;
+    g->pad_v14 = 0;
+    g->pad_v15 = 0;
     g->crc = ash_game_crc(g);
 }
 
@@ -493,10 +623,10 @@ static void test_scan_dump_ignores_corrupt(void)
     make_sealed(&bad, 99, 3, 99);
     bad.crc ^= 1u;
 
-    uint8_t dump[1600];
+    uint8_t dump[2000];
     memset(dump, 0xA5, sizeof(dump));
     memcpy(dump + 40, &bad, sizeof(bad));
-    memcpy(dump + 800, &good, sizeof(good));
+    memcpy(dump + 1000, &good, sizeof(good));
 
     ash_game_t found;
     assert(ashbox_save_scan_dump(dump, sizeof(dump), &found));
@@ -533,6 +663,11 @@ int main(void)
     assert(ashbox_save_v9_bytes() == offsetof(ash_game_t, iron) + sizeof(uint32_t) ||
            ashbox_save_v9_bytes() >= offsetof(ash_game_t, iron) + sizeof(uint32_t));
     test_pad_v13_seals_crc_gap();
+    test_v13_migrates_to_v14();
+    test_v14_migrates_to_v15();
+    test_v15_migrates_to_v16();
+    test_v16_migrates_to_v17();
+    test_v17_roundtrip_keeps_plans_and_legs();
     test_decode_v11_roundtrip();
     test_migrate_v12_frozen_blob();
     test_migrate_v10_widens_day_latches();

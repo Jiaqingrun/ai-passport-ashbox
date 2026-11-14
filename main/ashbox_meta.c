@@ -153,6 +153,9 @@ void ash_game_restart_with_meta(ash_game_t *g, ashbox_meta_t *m)
     if (m) ash_game_apply_meta_grants(g, m);
 }
 
+_Static_assert((1u << ASH_ACH_COUNT) - 1u == ASH_ACH_ALL_MASK,
+               "ASH_ACH_COUNT must match the unlocked bitmask");
+
 const char *ash_ach_name(uint16_t bit)
 {
     switch (bit) {
@@ -166,6 +169,12 @@ const char *ash_ach_name(uint16_t bit)
         return "和平主义者";
     case ASH_ACH_NOBODY:
         return "无人生还";
+    case ASH_ACH_TALK:
+        return "夜话人";
+    case ASH_ACH_CODEX5:
+        return "听风者";
+    case ASH_ACH_CODEX10:
+        return "记录者";
     default:
         return "成就";
     }
@@ -184,6 +193,12 @@ const char *ash_ach_cond(uint16_t bit)
         return "通关前从未拿手枪或子弹";
     case ASH_ACH_NOBODY:
         return "通关时站里一个人都没有";
+    case ASH_ACH_TALK:
+        return "完成一次夜谈";
+    case ASH_ACH_CODEX5:
+        return "观测簿记下5条";
+    case ASH_ACH_CODEX10:
+        return "观测簿记下10条";
     default:
         return "";
     }
@@ -202,6 +217,12 @@ const char *ash_ach_grant(uint16_t bit)
         return "重新开始后：仓库口粮容量多50";
     case ASH_ACH_NOBODY:
         return "重新开始后：得到1个超级核心（生涯一次）";
+    case ASH_ACH_TALK:
+        return "称号：夜话人";
+    case ASH_ACH_CODEX5:
+        return "称号：听风者";
+    case ASH_ACH_CODEX10:
+        return "称号：记录者";
     default:
         return "";
     }

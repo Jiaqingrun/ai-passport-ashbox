@@ -45,7 +45,7 @@ void paint_pick(void)
             lv_label_set_text(s_list_labels[slot], line);
             lv_label_set_text(s_list_subs[slot], sub);
             lv_label_set_long_mode(s_list_labels[slot], LV_LABEL_LONG_MODE_CLIP);
-            lv_label_set_long_mode(s_list_subs[slot], LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+            lv_label_set_long_mode(s_list_subs[slot], LV_LABEL_LONG_MODE_DOTS);
             lv_obj_set_width(s_list_labels[slot], 196);
             lv_obj_set_width(s_list_subs[slot], 196);
             lv_obj_set_style_anim_duration(s_list_subs[slot], 10000, LV_PART_MAIN);
@@ -87,7 +87,7 @@ void paint_pick(void)
             lv_label_set_text(s_list_labels[i], line);
             lv_label_set_text(s_list_subs[i], sub);
             lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
-            lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+            lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_DOTS);
             lv_obj_set_width(s_list_labels[i], 196);
             lv_obj_set_width(s_list_subs[i], 196);
             lv_obj_set_style_anim_duration(s_list_subs[i], 9000, LV_PART_MAIN);
@@ -97,6 +97,43 @@ void paint_pick(void)
             lv_obj_set_pos(s_list_labels[i], 10, 4);
             lv_obj_set_pos(s_list_subs[i], 10, 26);
         }
+    } else if (s_depart_step == 3) {
+        lv_label_set_text(s_title, "走法");
+        count = 3;
+        bool take_gun = (s_pick_gear == 2) && s_g->ammo > 0 &&
+                        ((*ash_game_equip_pis_mut(s_g, (unsigned)s_pick_person)) || s_g->pistol > 0);
+        uint8_t gun = take_gun ? 1 : 0;
+        uint8_t ammo = take_gun ? 1 : 0;
+        if (s_list_sel < 0) s_list_sel = 0;
+        if (s_list_sel >= count) s_list_sel = count - 1;
+        for (int i = 0; i < count; i++) {
+            ash_stance_t st = (ash_stance_t)(i + 1);
+            uint8_t fail = (uint8_t)ash_game_depart_fail_pct_stance(
+                s_g, s_pick_tier, s_pick_person, gun, ammo, st);
+            if (i == 0) {
+                snprintf(line, sizeof(line), "稳走");
+                snprintf(sub, sizeof(sub), "  掉落85%% · 空手%u%% · 留退路  ·  ", (unsigned)fail);
+            } else if (i == 1) {
+                snprintf(line, sizeof(line), "快走");
+                snprintf(sub, sizeof(sub), "  掉落100%% · 空手%u%% · 路短15%%  ·  ", (unsigned)fail);
+            } else {
+                snprintf(line, sizeof(line), "贪走");
+                snprintf(sub, sizeof(sub), "  掉落135%% · 空手%u%% · 成功威胁+2  ·  ", (unsigned)fail);
+            }
+            lv_label_set_text(s_list_labels[i], line);
+            lv_label_set_text(s_list_subs[i], sub);
+            lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
+            lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_DOTS);
+            lv_obj_set_width(s_list_labels[i], 196);
+            lv_obj_set_width(s_list_subs[i], 196);
+            lv_obj_set_style_anim_duration(s_list_subs[i], 9000, LV_PART_MAIN);
+            lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_size(s_list_rows[i], 216, 48);
+            lv_obj_set_pos(s_list_rows[i], 12, 12 + i * 52);
+            lv_obj_set_pos(s_list_labels[i], 10, 4);
+            lv_obj_set_pos(s_list_subs[i], 10, 26);
+        }
+        for (int i = count; i < ASH_LIST_MAX; i++) lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_label_set_text(s_title, "携带");
         count = GEAR_PICK_COUNT;
@@ -123,7 +160,7 @@ void paint_pick(void)
             lv_label_set_text(s_list_labels[i], line);
             lv_label_set_text(s_list_subs[i], sub);
             lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
-            lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+            lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_DOTS);
             lv_obj_set_width(s_list_labels[i], 196);
             lv_obj_set_width(s_list_subs[i], 196);
             lv_obj_set_style_anim_duration(s_list_subs[i], 9000, LV_PART_MAIN);
@@ -137,10 +174,12 @@ void paint_pick(void)
     paint_list_sel(count);
     set_bar_dual(false);
     set_btn(s_btn_pri, s_btn_pri_lab,
-            (s_depart_step == 1) ? "下一步" : "确认出发", true, true);
+            (s_depart_step == 1 || s_depart_step == 2) ? "下一步" : "出发", true, true);
     s_focus = 0;
     if (s_depart_step == 1) {
         lv_label_set_text(s_hint, "信任高更少空手而归 · 疲劳高更容易空手而归 · 个性偏口粮或零件");
+    } else if (s_depart_step == 3) {
+        lv_label_set_text(s_hint, "走法只影响这一趟 · 稳走少拿少险 · 贪走多拿多险");
     } else {
         uint16_t fc = ash_game_expedition_food_cost(s_pick_tier);
         uint16_t wc = ash_game_expedition_water_cost(s_pick_tier);

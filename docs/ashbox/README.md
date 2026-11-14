@@ -19,6 +19,7 @@ Offline post-apocalypse idle game for FoloToy AI Passport.
 - Retired audit snapshots, one row each: [AUDIT_HISTORY.md](./AUDIT_HISTORY.md)
 - **Content findings and implementation spec (current)**: [AUDIT_GAMEPLAY_20261108.md](./AUDIT_GAMEPLAY_20261108.md)
   · [OPTIMIZE_PLAN_20261108.md](./OPTIMIZE_PLAN_20261108.md)
+- **2.0 upgrade proposal (gameplay / motion / page design, not implemented)**: [UPGRADE_PLAN_20261114.md](./UPGRADE_PLAN_20261114.md) (draft mockups in `docs/assets/ashbox-v2/`)
 
 - Hub: station duty (awake play), farm (two fields · grain/root), stash + furniture, Iron Shed / Ash River trade; hunt needs gate open (unlocks the station door to the hunt path)
 - Player-facing planning copy: route sublines show loot ranges / empty-handed probability / rares / ember catch-up; person rows show biases; build footer + scrollable Help list the rates and sources

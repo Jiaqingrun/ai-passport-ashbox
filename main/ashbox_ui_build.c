@@ -11,7 +11,7 @@ void paint_build(void)
     lv_label_set_text(s_title, "建设");
     char buf[64];
     const char *names[] = {"宿舍", "食堂", "工坊", "闸门", "仓库扩容", "仓家具", "猎装", "静音轮",
-                           "门扣", "灶层", "匣灯", "深坑", "水井", "工作台", "超级核心"};
+                           "门扣", "灶层", "匣灯", "深坑", "水井", "工作台", "超级核心", "工坊档", "计划"};
     uint8_t lvs[] = {s_g->dorm_lv, s_g->kitchen_lv, s_g->workshop_lv, s_g->gate_unlocked};
     int view = BUILD_VIEW;
     if (BUILD_COUNT < view) view = BUILD_COUNT;
@@ -156,7 +156,7 @@ void paint_build(void)
                 cost_row = true;
                 enough = ash_game_craft_can(s_g, ASH_CRAFT_BENCH);
             }
-        } else {
+        } else if (i == 14) {
             if (s_g->build_cap_bonus > 0) {
                 snprintf(buf, sizeof(buf), "超级核心  已用");
             } else if (s_g->super_core == 0) {
@@ -166,6 +166,16 @@ void paint_build(void)
                 cost_row = true;
                 enough = true;
             }
+        } else if (i == 15) {
+            ash_build_mode_t m = ash_game_build_mode(s_g);
+            unsigned out = (m == ASH_BUILD_STEADY) ? 85 : (m == ASH_BUILD_HARD) ? 125 : 100;
+            unsigned th = (m == ASH_BUILD_STEADY) ? 90 : (m == ASH_BUILD_HARD) ? 120 : 100;
+            snprintf(buf, sizeof(buf), "工坊档 %s 产%u 胁%u",
+                     ash_game_build_mode_name(m), out, th);
+        } else {
+            int done = 0;
+            for (int p = 0; p < ASH_PLAN_COUNT; p++) done += ash_game_plan_done(s_g, p) ? 1 : 0;
+            snprintf(buf, sizeof(buf), "计划  %d/%d · 分批发料", done, ASH_PLAN_COUNT);
         }
         lv_label_set_text(s_list_labels[slot], buf);
         if (cost_row) set_cost_color(s_list_labels[slot], enough);
@@ -187,6 +197,8 @@ void paint_build(void)
     else if (s_list_sel == 7 || s_list_sel == 8 || s_list_sel == 9 || s_list_sel == 10) cta = "安装";
     else if (s_list_sel == 13) cta = s_g->craft_bench ? "已有" : "去做";
     else if (s_list_sel == 14) cta = "用掉";
+    else if (s_list_sel == 15) cta = "切换";
+    else if (s_list_sel == 16) cta = "查看";
     set_bar_dual(false);
     set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), cta, true, true);
     s_focus = 0;
@@ -216,6 +228,8 @@ void paint_build(void)
         lv_label_set_text(s_hint, "仓满会停产 · 先扩容");
     else if (s_list_sel == 1)
         lv_label_set_text(s_hint, "食堂降日耗 · 高档解锁菜地");
+    else if (s_list_sel == 16)
+        lv_label_set_text(s_hint, "献料 · 满件+铁够才落成");
     else if (s_list_sel == 12)
         lv_label_set_text(s_hint, "升井只停产水 · 别处照常");
     else

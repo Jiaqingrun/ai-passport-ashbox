@@ -13,7 +13,7 @@
 /** Mirror of primary save; written first so a torn primary write can fall back. */
 #define ASHBOX_NVS_SAVE_BAK_KEY "sv2"
 /* Host/x86 and ESP32-C3 agree today; fail the build if the blob layout drifts. */
-#define ASHBOX_SAVE_BLOB_SIZE 776u
+#define ASHBOX_SAVE_BLOB_SIZE 816u
 
 esp_err_t ashbox_save_init(void);
 esp_err_t ashbox_save_load(ash_game_t *g);

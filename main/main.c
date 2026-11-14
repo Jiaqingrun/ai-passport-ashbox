@@ -1,3 +1,4 @@
+#include "ashbox_digest.h"
 #include "ashbox_embackup.h"
 #include "ashbox_game.h"
 #include "ashbox_runtime.h"
@@ -140,6 +141,10 @@ static void boot_settle(uint32_t wake_causes)
         }
     }
     s_sleep_rtc_magic = 0;
+    if (!deep) {
+        /* Only a real deep-sleep wake can compare against the pre-sleep blob. */
+        ashbox_digest_discard();
+    }
 
     if (!clk.trusted) {
         /* Power-on / RTC rewind: do not economy-advance, and never smash a good
@@ -194,6 +199,8 @@ static esp_err_t try_sleep(void)
     s_sleep_rtc_enter = now;
     s_sleep_rtc_magic = ASH_SLEEP_RTC_MAGIC;
     (void)ashbox_save_store_mirrored(&s_game);
+    /* M1 return digest: remember what the station looked like before the wait. */
+    (void)ashbox_digest_store(&s_game, now);
     if (s_game.exp.active && s_game.exp.remaining_s > 0) {
         alarm = s_game.exp.remaining_s;
         if (alarm > 28800) alarm = 28800;

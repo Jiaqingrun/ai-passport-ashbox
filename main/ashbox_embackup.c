@@ -190,7 +190,7 @@ static bool hook_commit(const uint8_t *data, size_t len, uint32_t crc, void *use
         result = 3;
     } else {
         /* B20: blob present is not enough — decode/CRC must succeed.
-         * Static scratch: ash_game_t is 776B; avoid stacking on a tight task. */
+         * Static scratch: ash_game_t is 784B; avoid stacking on a tight task. */
         static ash_game_t s_verify;
         if (ashbox_save_load(&s_verify) != ESP_OK) {
             ESP_LOGE(TAG, "post-import verify failed: save decode/CRC");

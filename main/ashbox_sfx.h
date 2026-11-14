@@ -23,5 +23,7 @@ void ashbox_sfx_set_radio(bool on);
 void ashbox_sfx_set_volume(uint8_t percent); /* 0..100 master */
 bool ashbox_sfx_enabled(void);
 bool ashbox_sfx_radio_on(void);
+/** True while a recorded radio voice is playing (M1 on-screen bars). */
+bool ashbox_sfx_radio_speaking(void);
 void ashbox_sfx_play(ash_sfx_id_t id);
 void ashbox_sfx_stop_all(void); /* soft mute before deep sleep; hardware teardown is in ashbox_enter_deep_sleep */

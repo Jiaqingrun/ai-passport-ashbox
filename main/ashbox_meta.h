@@ -16,7 +16,11 @@
 #define ASH_ACH_CROWD (1u << 2)
 #define ASH_ACH_PACIFIST (1u << 3)
 #define ASH_ACH_NOBODY (1u << 4)
-#define ASH_ACH_ALL_MASK 0x1Fu
+#define ASH_ACH_TALK (1u << 5)
+#define ASH_ACH_CODEX5 (1u << 6)
+#define ASH_ACH_CODEX10 (1u << 7)
+#define ASH_ACH_ALL_MASK 0xFFu
+#define ASH_ACH_COUNT 8u
 
 typedef struct {
     uint32_t magic;

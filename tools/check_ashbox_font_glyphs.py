@@ -15,6 +15,16 @@ SOURCES = [
     ROOT / "main/ashbox_game_loot.c",
     ROOT / "main/ashbox_help_copy.c",
     ROOT / "main/ashbox_save.c",
+    ROOT / "main/ashbox_meta.c",
+    ROOT / "main/ashbox_embackup_proto.c",
+    ROOT / "main/ashbox_phenom.c",
+    ROOT / "main/ashbox_codex.c",
+    ROOT / "main/ashbox_talk.c",
+    ROOT / "main/ashbox_radio.c",
+    ROOT / "main/ashbox_stage.c",
+    ROOT / "main/ashbox_ambience.c",
+    ROOT / "main/ashbox_digest.c",
+    ROOT / "main/ashbox_digest_logic.c",
     ROOT / "main/main.c",
 ] + sorted(ROOT.glob("main/ashbox_ui*.c"))
 SYMBOLS = ROOT / "main/ashbox_font_symbols.txt"

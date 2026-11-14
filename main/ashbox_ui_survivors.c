@@ -141,9 +141,10 @@ void paint_achieve(void)
     s_page = UI_ACHIEVE;
     show_home_chrome(false);
     lv_label_set_text(s_title, "成就");
-    static const uint16_t bits[5] = {
-        ASH_ACH_LONE, ASH_ACH_TOGETHER, ASH_ACH_CROWD, ASH_ACH_PACIFIST, ASH_ACH_NOBODY};
-    int n = 5;
+    static const uint16_t bits[ASH_ACH_COUNT] = {
+        ASH_ACH_LONE, ASH_ACH_TOGETHER, ASH_ACH_CROWD, ASH_ACH_PACIFIST, ASH_ACH_NOBODY,
+        ASH_ACH_TALK, ASH_ACH_CODEX5, ASH_ACH_CODEX10};
+    int n = (int)ASH_ACH_COUNT;
     if (s_list_sel < 0) s_list_sel = 0;
     if (s_list_sel >= n) s_list_sel = n - 1;
     for (int slot = 0; slot < ASH_LIST_MAX; slot++) lv_obj_add_flag(s_list_rows[slot], LV_OBJ_FLAG_HIDDEN);

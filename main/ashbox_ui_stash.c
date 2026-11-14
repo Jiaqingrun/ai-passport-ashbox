@@ -71,7 +71,7 @@ void paint_stash(void)
         if (cost_row) set_cost_color(s_list_subs[slot], enough);
         else lv_obj_set_style_text_color(s_list_subs[slot], lv_color_hex(COL_MUTED), 0);
         lv_label_set_long_mode(s_list_labels[slot], LV_LABEL_LONG_MODE_CLIP);
-        lv_label_set_long_mode(s_list_subs[slot], LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+        lv_label_set_long_mode(s_list_subs[slot], LV_LABEL_LONG_MODE_DOTS);
         lv_obj_set_width(s_list_labels[slot], 196);
         lv_obj_set_width(s_list_subs[slot], 196);
         lv_obj_clear_flag(s_list_subs[slot], LV_OBJ_FLAG_HIDDEN);

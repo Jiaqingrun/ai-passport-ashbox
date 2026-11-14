@@ -28,7 +28,7 @@ int equip_craft_base(void);
 int equip_count(void);
 
 /* Page list sizes (single source of truth for unit and dispatcher). */
-#define BUILD_COUNT 15 /* +工作台；超级核心仍在末项 */
+#define BUILD_COUNT 17 /* +工作台；超级核心；工坊强度；计划 */
 #define BUILD_VIEW 5
 #define FARM_VIEW 4
 #define SETTINGS_COUNT 7
@@ -73,6 +73,17 @@ typedef enum {
     UI_SURVIVORS,
     UI_SURVIVOR_DETAIL,
     UI_ACHIEVE,
+    UI_PLAN,
+    UI_PHENOM,
+    UI_CODEX,
+    UI_CODEX_LIST,
+    UI_CODEX_ENTRY,
+    UI_TALK,
+    UI_RADIO,
+    UI_TUNE,
+    UI_RADIO_RESULT,
+    UI_PROJECTS,
+    UI_LEG,
     UI_RESTART_CONFIRM,
 } ui_page_t;
 
@@ -95,6 +106,7 @@ extern ashbox_meta_t s_meta;
 extern ash_settings_t s_cfg;
 extern uint8_t s_surv_pid;
 extern int s_depart_step;
+extern int s_pick_gear;
 extern ash_tier_t s_pick_tier;
 extern uint8_t s_pick_person;
 extern ash_loadout_t s_pick_load;
@@ -126,6 +138,12 @@ void paint_survivors(void);
 void paint_survivor_detail(void);
 void paint_achieve(void);
 void paint_restart_confirm(void);
+void paint_projects(void);
+void paint_leg(void);
+void activate_projects(void);
+void activate_leg(void);
+void ashbox_ui_mark_save_urgent(void);
+void ashbox_ui_after_leg(bool withdrew);
 
 /* Page helpers the core dispatcher also queries. */
 ash_craft_t equip_craft_kind(int row);

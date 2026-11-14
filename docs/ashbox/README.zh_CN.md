@@ -19,6 +19,7 @@
 - 已归档的审计快照（每次一行）：[AUDIT_HISTORY.zh_CN.md](./AUDIT_HISTORY.zh_CN.md)
 - **当前内容发现与实现规格**：[AUDIT_GAMEPLAY_20261108.zh_CN.md](./AUDIT_GAMEPLAY_20261108.zh_CN.md)
   · [OPTIMIZE_PLAN_20261108.zh_CN.md](./OPTIMIZE_PLAN_20261108.zh_CN.md)
+- **2.0 升级提案（玩法 / 动态表现 / 页面设计，未实现）**：[UPGRADE_PLAN_20261114.zh_CN.md](./UPGRADE_PLAN_20261114.zh_CN.md)（界面草案见 `docs/assets/ashbox-v2/`）
 
 - 据点枢纽：日勤（醒着可玩）、菜地（两块田地·谷/薯）、仓库可扩容/仓家具、铁棚·渡口交易、线索；选档含猎场（需开闸：打开站门后才能走）
 - 玩家可见规划说明：选路副行写明掉落区间/空手而归概率/稀有与补余烬；人选写明加成；建设底栏与「帮助」可翻阅概率、出处与建设效果

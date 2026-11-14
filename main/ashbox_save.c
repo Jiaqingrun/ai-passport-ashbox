@@ -741,8 +741,27 @@ _Static_assert(sizeof(ash_game_v12_t) == 744u,
                "frozen v12 blob size must stay 744");
 _Static_assert(sizeof(((ash_game_t *)0)->pad_v13) == 6u,
                "pad_v13 must seal alignment before crc");
-_Static_assert(offsetof(ash_game_t, crc) == offsetof(ash_game_t, pad_v13) + 6u,
-               "no anonymous padding allowed between pad_v13 and crc");
+_Static_assert(offsetof(ash_game_t, codex_seen) == offsetof(ash_game_t, pad_v13) + 6u,
+               "v14 fields must follow pad_v13 with no gap");
+_Static_assert(offsetof(ash_game_t, codex_seen) == 772u,
+               "v13 blob ends after pad_v13; v14 prefix must stay 772 bytes");
+_Static_assert(offsetof(ash_game_t, talk_day) == offsetof(ash_game_t, pad_v14) + 1u,
+               "v15 fields must follow pad_v14 with no gap");
+_Static_assert(offsetof(ash_game_t, talk_day) == 780u &&
+               offsetof(ash_game_t, sig_day) == 782u &&
+               offsetof(ash_game_t, sig_bits) == 784u &&
+               offsetof(ash_game_t, pad_v15) == 786u,
+               "v14 blob ends after pad_v14; v15 prefix must stay 780 bytes");
+_Static_assert(offsetof(ash_game_t, build_mode) == 788u &&
+               offsetof(ash_game_t, pad_v16) == 789u,
+               "v16 fields must follow pad_v15 with no gap");
+_Static_assert(offsetof(ash_game_t, exp_leg) == 796u &&
+               offsetof(ash_game_t, plan_done) == 800u &&
+               offsetof(ash_game_t, plan_parts) == 801u &&
+               offsetof(ash_game_t, pad_v17) == 807u,
+               "v17 fields must follow pad_v16 with no gap");
+_Static_assert(offsetof(ash_game_t, crc) == offsetof(ash_game_t, pad_v17) + 5u,
+               "no anonymous padding allowed between pad_v17 and crc");
 _Static_assert(offsetof(ash_game_t, crc) + sizeof(uint32_t) == sizeof(ash_game_t),
                "crc must be the final field with no trailing padding");
 _Static_assert(sizeof(ash_game_t) % 8u == 0u,
@@ -785,6 +804,10 @@ static void ash_game_seal_for_store(ash_game_t *g)
     memset(g->pad_v12, 0, sizeof(g->pad_v12));
     memset(g->pad_v13, 0, sizeof(g->pad_v13));
     g->pad_v13a = 0;
+    g->pad_v14 = 0;
+    g->pad_v15 = 0;
+    memset(g->pad_v16, 0, sizeof(g->pad_v16));
+    memset(g->pad_v17, 0, sizeof(g->pad_v17));
     g->crc = ash_game_crc(g);
 }
 
@@ -804,6 +827,10 @@ static bool rescue_scan_save(const uint8_t *dump, size_t dump_len, ash_game_t *o
         memcpy(&ver, dump + off + 4, sizeof(ver));
         size_t try_len = 0;
         if (ver == ASHBOX_SAVE_VER) try_len = sizeof(ash_game_t);
+        else if (ver == 16) try_len = 800u;
+        else if (ver == 15) try_len = 792u;
+        else if (ver == 14) try_len = 784u;
+        else if (ver == 13) try_len = 776u;
         else if (ver == 12) try_len = sizeof(ash_game_v12_t);
         else if (ver == 11) try_len = sizeof(ash_game_v11_t);
         else if (ver == 10) try_len = sizeof(ash_game_v10_t);
@@ -1196,8 +1223,91 @@ esp_err_t ashbox_save_decode(const uint8_t *raw, size_t len, ash_game_t *g)
         memset(g->pad_v12, 0, sizeof(g->pad_v12));
         memset(g->pad_v13, 0, sizeof(g->pad_v13));
         g->pad_v13a = 0;
+        g->pad_v14 = 0;
+        g->pad_v15 = 0;
+        memset(g->pad_v16, 0, sizeof(g->pad_v16));
+        memset(g->pad_v17, 0, sizeof(g->pad_v17));
+        if (g->build_mode >= ASH_BUILD_COUNT) g->build_mode = ASH_BUILD_NORMAL;
         g->crc = ash_game_crc(g);
         ash_game_after_migrate(g);
+        return ESP_OK;
+    }
+
+    if (magic == ASHBOX_MAGIC && ver == 16 && len == 800u) {
+        /* v16 == the 796-byte prefix of v17 plus crc; legs/plans default zero. */
+        static uint8_t s_v16[800];
+        memcpy(s_v16, raw, sizeof(s_v16));
+        uint32_t expect = 0;
+        memcpy(&expect, s_v16 + 796u, sizeof(expect));
+        uint32_t zero = 0;
+        memcpy(s_v16 + 796u, &zero, sizeof(zero));
+        if (crc32_bytes_local(s_v16, sizeof(s_v16)) != expect) return ESP_ERR_INVALID_CRC;
+        memset(g, 0, sizeof(*g));
+        memcpy(g, raw, 796u);
+        g->ver = ASHBOX_SAVE_VER;
+        ash_game_log(g, "分段远征与计划启用");
+        ash_game_after_migrate(g);
+        ESP_LOGW(TAG, "migrated v16 save to v%d", ASHBOX_SAVE_VER);
+        return ESP_OK;
+    }
+
+    if (magic == ASHBOX_MAGIC && ver == 15 && len == 792u) {
+        /* v15 == the 788-byte prefix of v16 plus crc; mode defaults to normal. */
+        static uint8_t s_v15[792];
+        memcpy(s_v15, raw, sizeof(s_v15));
+        uint32_t expect = 0;
+        memcpy(&expect, s_v15 + 788u, sizeof(expect));
+        uint32_t zero = 0;
+        memcpy(s_v15 + 788u, &zero, sizeof(zero));
+        if (crc32_bytes_local(s_v15, sizeof(s_v15)) != expect) return ESP_ERR_INVALID_CRC;
+        memset(g, 0, sizeof(*g));
+        memcpy(g, raw, 788u);
+        g->build_mode = ASH_BUILD_NORMAL;
+        g->ver = ASHBOX_SAVE_VER;
+        ash_game_log(g, "工坊强度档启用");
+        ash_game_after_migrate(g);
+        ESP_LOGW(TAG, "migrated v15 save to v%d", ASHBOX_SAVE_VER);
+        return ESP_OK;
+    }
+
+    if (magic == ASHBOX_MAGIC && ver == 14 && len == 784u) {
+        /* v14 == the 780-byte prefix of v15 plus crc; codex_flags held the talk day. */
+        static uint8_t s_v14[784];
+        memcpy(s_v14, raw, sizeof(s_v14));
+        uint32_t expect = 0;
+        memcpy(&expect, s_v14 + 780u, sizeof(expect));
+        uint32_t zero = 0;
+        memcpy(s_v14 + 780u, &zero, sizeof(zero));
+        if (crc32_bytes_local(s_v14, sizeof(s_v14)) != expect) return ESP_ERR_INVALID_CRC;
+        memset(g, 0, sizeof(*g));
+        memcpy(g, raw, 780u);
+        g->talk_day = g->codex_flags;
+        g->codex_flags = 0;
+        g->sig_day = 0;
+        g->sig_bits = 0;
+        g->pad_v15 = 0;
+        g->ver = ASHBOX_SAVE_VER;
+        ash_game_log(g, "守听启用");
+        ash_game_after_migrate(g);
+        ESP_LOGW(TAG, "migrated v14 save to v%d", ASHBOX_SAVE_VER);
+        return ESP_OK;
+    }
+
+    if (magic == ASHBOX_MAGIC && ver == 13 && len == 776u) {
+        /* v13 == the 772-byte prefix of v14 plus crc; append fields default 0. */
+        static uint8_t s_v13[776];
+        memcpy(s_v13, raw, sizeof(s_v13));
+        uint32_t expect = 0;
+        memcpy(&expect, s_v13 + 772u, sizeof(expect));
+        uint32_t zero = 0;
+        memcpy(s_v13 + 772u, &zero, sizeof(zero));
+        if (crc32_bytes_local(s_v13, sizeof(s_v13)) != expect) return ESP_ERR_INVALID_CRC;
+        memset(g, 0, sizeof(*g));
+        memcpy(g, raw, 772u);
+        g->ver = ASHBOX_SAVE_VER;
+        ash_game_log(g, "观测簿启用");
+        ash_game_after_migrate(g);
+        ESP_LOGW(TAG, "migrated v13 save to v%d", ASHBOX_SAVE_VER);
         return ESP_OK;
     }
 

@@ -78,6 +78,7 @@ extern const uint8_t hearth_fire_pcm_end[] asm("_binary_hearth_fire_pcm_end");
 
 static const uint8_t *s_samp_bytes; /* 勿直接强转 int16*：binary 嵌入常落在奇数地址 */
 static uint32_t s_samp_n;
+static volatile bool s_voice_speaking;
 static uint8_t s_samp_gain; /* 额外增益，补偿部分素材响度 */
 
 static uint32_t noise_u32(void)
@@ -266,6 +267,7 @@ static void bind_sample(const uint8_t *start, const uint8_t *end, uint8_t gain)
     s_samp_gain = gain ? gain : 100;
     s_evt_pos = 0;
     s_evt_len = s_samp_n;
+    s_voice_speaking = true;
 }
 
 /* 小端 s16：按字节拼装，兼容未对齐 Flash 嵌入 */
@@ -369,6 +371,7 @@ static void write_radio_chunk(void)
                 s_evt = RADIO_EVT_NONE;
                 s_evt_pos = 0;
                 s_samp_bytes = NULL;
+                s_voice_speaking = false;
                 s_radio_had_event = true;
                 schedule_next_radio_event();
             }
@@ -396,6 +399,7 @@ static void apply_stop_locked(void)
     s_evt_pos = 0;
     s_samp_bytes = NULL;
     s_samp_n = 0;
+    s_voice_speaking = false;
 }
 
 static void sfx_task(void *arg)
@@ -455,6 +459,7 @@ void ashbox_sfx_set_radio(bool on)
         s_evt = RADIO_EVT_NONE;
         s_evt_pos = 0;
         s_samp_bytes = NULL;
+        s_voice_speaking = false;
     } else if (s_next_event_at == 0 || s_next_event_at < s_radio_samples) {
         schedule_next_radio_event();
     }
@@ -475,6 +480,11 @@ bool ashbox_sfx_enabled(void)
 bool ashbox_sfx_radio_on(void)
 {
     return s_radio;
+}
+
+bool ashbox_sfx_radio_speaking(void)
+{
+    return s_voice_speaking;
 }
 
 void ashbox_sfx_play(ash_sfx_id_t id)

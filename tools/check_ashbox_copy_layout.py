@@ -102,19 +102,23 @@ def main() -> int:
                 f"lines at width≈{HELP_CELLS_PER_LINE}: {s}"
             )
 
-    # paint_help must WRAP and must not use a tiny snprintf pad.
-    # It may live in ashbox_ui.c or a split page unit.
-    body = None
-    for src in UI_FILES:
-        text = src.read_text(encoding="utf-8")
-        start = text.find("void paint_help(void)")
-        if start < 0:
-            continue
-        end = text.find("\nvoid ", start + 1)
-        end_static = text.find("\nstatic void ", start + 1)
-        stops = [x for x in (end, end_static) if x > 0]
-        body = text[start:min(stops)] if stops else text[start:]
-        break
+    # paint_help is the chapter chooser; paint_help_topic renders the body.
+    # Both may live in ashbox_ui.c or a split page unit, so locate each one.
+    def function_body(name: str):
+        for src in UI_FILES:
+            text = src.read_text(encoding="utf-8")
+            marker = f"void {name}(void)"
+            start = text.find(marker)
+            if start < 0:
+                continue
+            end = text.find("\nvoid ", start + 1)
+            end_static = text.find("\nstatic void ", start + 1)
+            stops = [x for x in (end, end_static) if x > 0]
+            return text[start:min(stops)] if stops else text[start:]
+        return None
+
+    body = function_body("paint_help")
+    topic_body = function_body("paint_help_topic")
     if body is None:
         fail("paint_help() not found")
     if "LV_LABEL_LONG_MODE_WRAP" not in body:
@@ -123,7 +127,14 @@ def main() -> int:
         fail("paint_help must not CLIP or marquee-scroll instruction lines")
     if re.search(r"char\s+padded\s*\[\s*\d+\s*\]", body):
         fail("paint_help must not snprintf into a pad buffer (truncates UTF-8)")
-    if "ashbox_help_line" not in body:
+    if topic_body is not None:
+        if "LV_LABEL_LONG_MODE_WRAP" not in topic_body:
+            fail("paint_help_topic must use LV_LABEL_LONG_MODE_WRAP")
+        if "ashbox_help_line" not in topic_body:
+            fail("paint_help_topic must set text from ashbox_help_line()")
+        if re.search(r"char\s+padded\s*\[\s*\d+\s*\]", topic_body):
+            fail("paint_help_topic must not snprintf into a pad buffer")
+    elif "ashbox_help_line" not in body:
         fail("paint_help must set text from ashbox_help_line()")
 
     # Modal instruction lines must be created with WRAP.

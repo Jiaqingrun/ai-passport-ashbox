@@ -122,6 +122,10 @@ static lv_obj_t *s_scroll_thumb;
 
 int s_focus; /* 0 primary, 1 secondary / list index */
 int s_list_sel;
+static int s_hub_group; /* 1 station, 2 archive, 3 system */
+static ui_page_t s_pick_parent;  /* where the departure picker was opened from */
+static ui_page_t s_leg_parent;   /* where the leg choice was opened from */
+static ui_page_t s_event_parent; /* report/crisis opened from home or plan */
 static bool s_want_sleep;
 static volatile bool s_wake_guard;
 static bool s_night_aftermath;
@@ -309,7 +313,7 @@ static void style_panel(lv_obj_t *o, uint32_t bg)
 {
     lv_obj_set_style_bg_color(o, lv_color_hex(bg), 0);
     lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(o, 0, 0); /* 像素风：直角 */
+    lv_obj_set_style_radius(o, BSP_LVGL_SCREEN_RADIUS, 0); /* 全局面板圆角 30 px */
     lv_obj_set_style_border_width(o, 1, 0);
     lv_obj_set_style_border_color(o, lv_color_hex(COL_LINE), 0);
     lv_obj_set_style_pad_all(o, 0, 0);
@@ -467,8 +471,8 @@ void set_btn(lv_obj_t *btn, lv_obj_t *lab, const char *txt, bool on, bool focus)
 #define CONTENT_Y ASHBOX_UI_CONTENT_Y
 #define HINT_Y 250
 #define BAR_Y 268
-#define BAR_H 44
-#define BTN_Y 8
+#define BAR_H 52
+#define BTN_Y 12
 #define BTN_H 28
 #define BTN_GAP 8
 #define BTN_MARGIN 12
@@ -755,6 +759,7 @@ static void ui_row_reset(void)
         lv_obj_set_height(s_list_labels[i], 18);
         lv_obj_set_style_text_align(s_list_labels[i], LV_TEXT_ALIGN_LEFT, 0);
         lv_obj_set_width(s_list_subs[i], 196);
+        lv_obj_set_height(s_list_subs[i], 18);
         lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_CLIP);
         lv_obj_add_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
     }
@@ -1018,6 +1023,7 @@ void set_bar_dual(bool dual)
 static void paint_home(void);
 static void paint_guide_overlay(void);
 static void paint_hub(void);
+static bool hub_group_locate(ui_page_t page, int *group, int *row);
 static void paint_plan(void);
 static void paint_phenom(void);
 static void paint_codex(void);
@@ -1289,28 +1295,46 @@ static void ambience_tick_locked(int64_t now_us)
 static void go_back(void)
 {
     ashbox_sfx_play(ASH_SFX_BACK);
-    if (s_page == UI_PICK && s_depart_step > 0) {
-        s_depart_step--;
-        s_list_sel = (s_depart_step == 0) ? (int)s_pick_tier
-                     : (s_depart_step == 1) ? (int)s_pick_person
-                                           : (int)s_pick_load;
-        enter_page(UI_PICK);
-        paint_pick();
+    if (s_page == UI_PICK) {
+        if (s_depart_step > 0) {
+            s_depart_step--;
+            if (s_depart_step == 0) s_list_sel = (int)s_pick_tier;
+            else if (s_depart_step == 1) s_list_sel = (int)s_pick_person;
+            else s_list_sel = (int)s_pick_load;
+            enter_page(UI_PICK);
+            paint_pick();
+            return;
+        }
+        if (s_pick_parent == UI_PLAN) {
+            s_list_sel = 0;
+            enter_page(UI_PLAN);
+            paint_plan();
+        } else {
+            enter_page(UI_HOME);
+            paint_home();
+        }
         return;
     }
     if (s_page == UI_LEG) {
-        enter_page(UI_HOME);
-        paint_home();
+        if (s_leg_parent == UI_PLAN) {
+            s_list_sel = 0;
+            enter_page(UI_PLAN);
+            paint_plan();
+        } else {
+            enter_page(UI_HOME);
+            paint_home();
+        }
         return;
     }
-    if (s_page == UI_PROJECTS) {
-        s_list_sel = 16;
-        enter_page(UI_BUILD);
-        paint_build();
+    if (s_page == UI_HELP_TOPIC) {
+        s_list_sel = s_help_chapter;
+        enter_page(UI_HELP);
+        paint_help();
         return;
     }
-    if (s_page == UI_BUILD) {
-        s_list_sel = 6; /* 建设 */
+    if (s_page == UI_HUB_GROUP) {
+        s_list_sel = s_hub_group;
+        if (s_list_sel < 0 || s_list_sel >= 4) s_list_sel = 0;
         enter_page(UI_HUB);
         paint_hub();
         return;
@@ -1356,14 +1380,8 @@ static void go_back(void)
         paint_codex();
         return;
     }
-    if (s_page == UI_CODEX) {
-        s_list_sel = 15;
-        enter_page(UI_HUB);
-        paint_hub();
-        return;
-    }
     if (s_page == UI_PLAN) {
-        s_list_sel = 14;
+        s_list_sel = 0;
         enter_page(UI_HUB);
         paint_hub();
         return;
@@ -1374,34 +1392,40 @@ static void go_back(void)
         paint_plan();
         return;
     }
-    if (s_page == UI_DUTY || s_page == UI_SETTINGS || s_page == UI_HELP || s_page == UI_QUEST ||
-        s_page == UI_ORDER || s_page == UI_JOURNAL || s_page == UI_STASH || s_page == UI_RES ||
-        s_page == UI_EQUIP || s_page == UI_FARM || s_page == UI_TRADE ||
-        s_page == UI_SURVIVORS || s_page == UI_ACHIEVE) {
-        if (s_page == UI_SETTINGS) {
-            ash_em_ui_t em = ashbox_embackup_ui_state();
-            if (em == ASH_EM_UI_BACKUP_BUSY || em == ASH_EM_UI_IMPORT_BUSY) {
-                ashbox_sfx_play(ASH_SFX_WARN);
-                return; /* stay; do not abort an in-flight transfer via Back */
-            }
-            ashbox_embackup_leave_import();
-            ashbox_embackup_clear_ui_pulse();
+    if (s_page == UI_ORDER) {
+        s_list_sel = 2;
+        enter_page(UI_PLAN);
+        paint_plan();
+        return;
+    }
+    if (s_page == UI_REPORT || s_page == UI_CRISIS) {
+        if (s_event_parent == UI_PLAN) {
+            s_list_sel = 0;
+            enter_page(UI_PLAN);
+            paint_plan();
+        } else {
+            enter_page(UI_HOME);
+            paint_home();
         }
-        if (s_page == UI_DUTY) s_list_sel = 0;
-        else if (s_page == UI_FARM) s_list_sel = 1;
-        else if (s_page == UI_RES) s_list_sel = 2;
-        else if (s_page == UI_STASH) s_list_sel = 3;
-        else if (s_page == UI_SURVIVORS) s_list_sel = 4;
-        else if (s_page == UI_EQUIP) s_list_sel = 5;
-        else if (s_page == UI_TRADE) s_list_sel = 7;
-        else if (s_page == UI_ORDER) s_list_sel = 8;
-        else if (s_page == UI_QUEST) s_list_sel = 9;
-        else if (s_page == UI_ACHIEVE) s_list_sel = 10;
-        else if (s_page == UI_JOURNAL) s_list_sel = 11;
-        else if (s_page == UI_SETTINGS) s_list_sel = 12;
-        else s_list_sel = 13; /* help */
-        enter_page(UI_HUB);
-        paint_hub();
+        return;
+    }
+    if (s_page == UI_SETTINGS) {
+        ash_em_ui_t em = ashbox_embackup_ui_state();
+        if (em == ASH_EM_UI_BACKUP_BUSY || em == ASH_EM_UI_IMPORT_BUSY) {
+            ashbox_sfx_play(ASH_SFX_WARN);
+            return; /* stay; do not abort an in-flight transfer via Back */
+        }
+        ashbox_embackup_leave_import();
+        ashbox_embackup_clear_ui_pulse();
+    }
+    /* Every other page with a home in the four hub groups returns to that group. */
+    int group = 1;
+    int row = 0;
+    if (hub_group_locate(s_page, &group, &row)) {
+        s_hub_group = group;
+        s_list_sel = row;
+        enter_page(UI_HUB_GROUP);
+        paint_hub_group();
         return;
     }
     enter_page(UI_HOME);
@@ -1528,6 +1552,18 @@ static void paint_home(void)
                 s_g->report.branch_resolved ? "入账" : "抉择", true, s_focus == 0);
         set_btn(s_btn_sec, lv_obj_get_child(s_btn_sec, 0), "据点", true, s_focus == 1);
         set_home_hint("短按确定 · 长按深睡");
+    } else if (ash_game_leg_waiting(s_g)) {
+        s_wanderer_bell_armed = false;
+        label_set_if(s_card_title, "远征停住");
+        snprintf(buf, sizeof(buf), "第%u/%u段",
+                 (unsigned)s_g->exp_leg, (unsigned)s_g->exp_leg_total);
+        label_set_if(s_card_value, buf);
+        s_exp_rem_shown = UINT32_MAX;
+        set_card_sub_tip("停在段界 · 继续走或收手");
+        if (s_focus != 0) s_focus = 0;
+        set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "途中", true, s_focus == 0);
+        set_btn(s_btn_sec, lv_obj_get_child(s_btn_sec, 0), "据点", true, s_focus == 1);
+        set_home_hint("停住等你决定 · 进途中选继续或收手");
     } else if (s_g->exp.active) {
         label_set_if(s_card_title, "远征中");
         uint32_t rem = s_g->exp.remaining_s;
@@ -1604,16 +1640,16 @@ static void paint_home(void)
 static void paint_guide_overlay(void)
 {
     static const char *titles[ASH_GUIDE_DONE] = {
-        "三条线做完才过", "今天先做", "人回来要醒着", "盖盖子时间照走", "线索一天一步", "菜地会累人",
+        "三条线做完才过", "今天先做", "人回来要醒着", "进入休眠时间照走", "线索一天一步", "菜地会累人",
     };
     /* Four lines of at most 176 px each fit the 184x72 modal body exactly. */
     static const char *body[ASH_GUIDE_DONE] = {
         "三条线做完才算过\n铁皮来客 · 余烬低语\n门后灰潮 · 三条并行\n翻层后还能接着玩",
         "今天先派阿禾走一趟\n上下选 · 确定键确认\n零件盖建设\n余烬开闸去猎场",
         "人回来先醒着看战报\n再选一条抉择\n物资入账才算到手\n过路客先留下或打发",
-        "盖上盖子时间照走\n深睡会补这段时间\n断电倒计时不走\n醒来才补齐",
+        "进入休眠时间照走\n深睡会补这段时间\n断电倒计时不走\n醒来才补齐",
         "每条线索一天一步\n明天才能再推同一条\n帮助页还能再查\n怎么玩",
-        "稻谷约1天 · 基础30\n红薯约3天 · 基础240\n田作每时疲劳+5\n满80就歇",
+        "稻谷约1天 · 基础45\n红薯约2天 · 基础150\n田作每时疲劳+5\n满80就歇",
     };
     uint8_t step = s_cfg.guide_step;
     if (step >= ASH_GUIDE_DONE) step = ASH_GUIDE_DONE - 1u;
@@ -1659,7 +1695,8 @@ static void skip_guide(void)
 
 
 
-#define HUB_COUNT 16
+#define HUB_COUNT 4
+#define HUB_VIEW 4
 #define DUTY_COUNT ASHBOX_DUTY_KIND_N
 /* 资源页：仓位说明 + 物资概览 + 按人用药（制作已迁出） */
 #define RES_MED_BASE 2
@@ -1672,14 +1709,8 @@ static int res_count(void)
     if (pop > ASHBOX_PERSON_MAX) pop = ASHBOX_PERSON_MAX;
     return RES_MED_BASE + pop * 3;
 }
-#define HUB_VIEW 5
 #define HUB_ROW_H 34
 #define JOURNAL_VIEW 6
-
-static int hub_scroll_top(int sel, int count)
-{
-    return list_scroll_top(sel, count, HUB_VIEW);
-}
 
 void paint_hub_scrollbar(int sel, int count, int view)
 {
@@ -1689,7 +1720,18 @@ void paint_hub_scrollbar(int sel, int count, int view)
         lv_obj_add_flag(s_scroll_track, LV_OBJ_FLAG_HIDDEN);
         return;
     }
-    int track_h = view * HUB_ROW_H;
+    int row_h = HUB_ROW_H;
+    if (s_page == UI_HELP) row_h = 36;                 /* chapter rows: 34 + gap */
+    else if (s_page == UI_HELP_TOPIC) row_h = ASHBOX_HELP_ROW_STEP;
+    else if (s_page == UI_SETTINGS || s_page == UI_STASH || s_page == UI_EQUIP ||
+             s_page == UI_SURVIVORS || s_page == UI_SURVIVOR_DETAIL ||
+             s_page == UI_ACHIEVE || s_page == UI_RES || s_page == UI_TRADE ||
+             s_page == UI_FARM || s_page == UI_PICK || s_page == UI_DUTY) {
+        row_h = 44;
+    } else if (s_page == UI_PLAN || s_page == UI_CODEX_LIST || s_page == UI_PROJECTS) {
+        row_h = 38;
+    }
+    int track_h = view * row_h;
     if (track_h > LIST_LAYER_H - 16) track_h = LIST_LAYER_H - 16;
     if (track_h < 24) track_h = 24;
     lv_obj_set_size(s_scroll_track, 4, track_h);
@@ -1711,110 +1753,227 @@ void paint_hub_scrollbar(int sel, int count, int view)
 
 
 
+static const ui_page_t k_hub_station[] = {
+    UI_DUTY, UI_FARM, UI_RES, UI_STASH, UI_SURVIVORS,
+    UI_EQUIP, UI_BUILD, UI_PROJECTS, UI_TRADE,
+};
+static const ui_page_t k_hub_archive[] = {UI_QUEST, UI_CODEX, UI_ACHIEVE, UI_JOURNAL};
+static const ui_page_t k_hub_system[] = {UI_SETTINGS, UI_HELP};
+
+static int hub_group_count(void)
+{
+    if (s_hub_group == 1) return (int)(sizeof(k_hub_station) / sizeof(k_hub_station[0]));
+    if (s_hub_group == 2) return (int)(sizeof(k_hub_archive) / sizeof(k_hub_archive[0]));
+    if (s_hub_group == 3) return (int)(sizeof(k_hub_system) / sizeof(k_hub_system[0]));
+    return 0;
+}
+
+static ui_page_t hub_group_item(int row)
+{
+    int n = hub_group_count();
+    if (row < 0 || row >= n) return UI_HUB;
+    if (s_hub_group == 1) return k_hub_station[row];
+    if (s_hub_group == 2) return k_hub_archive[row];
+    return k_hub_system[row];
+}
+
+static bool hub_group_locate(ui_page_t page, int *group, int *row)
+{
+    for (int g = 1; g <= 3; g++) {
+        s_hub_group = g;
+        int n = hub_group_count();
+        for (int i = 0; i < n; i++) {
+            if (hub_group_item(i) == page) {
+                if (group) *group = g;
+                if (row) *row = i;
+                return true;
+            }
+        }
+    }
+    s_hub_group = 1;
+    return false;
+}
+
+static const char *hub_group_title(void)
+{
+    if (s_hub_group == 1) return "站务";
+    if (s_hub_group == 2) return "档案";
+    return "系统";
+}
+
+static void hub_item_label(ui_page_t page, char *buf, size_t cap)
+{
+    int ready = ash_game_farm_ready_count(s_g);
+    switch (page) {
+    case UI_DUTY: {
+        unsigned left = ash_game_duty_left(s_g);
+        if (s_g->exp.active) snprintf(buf, cap, "日勤  远征中不可");
+        else if (left > 0) snprintf(buf, cap, "日勤  今日余%u", left);
+        else snprintf(buf, cap, "日勤  今日已满");
+        break;
+    }
+    case UI_FARM:
+        if (!ash_game_farm_unlocked(s_g)) snprintf(buf, cap, "菜地  食堂升到2级");
+        else if (ready > 0) snprintf(buf, cap, "菜地  可收%d块田地", ready);
+        else if (ash_game_root_unlocked(s_g)) snprintf(buf, cap, "菜地  稻谷快/红薯饱");
+        else snprintf(buf, cap, "菜地  可种稻谷");
+        break;
+    case UI_RES:
+        snprintf(buf, cap, "资源  仓位%u/%u",
+                 (unsigned)ash_game_stash_slots_used(s_g),
+                 (unsigned)ash_game_stash_slots_cap(s_g));
+        break;
+    case UI_STASH:
+        snprintf(buf, cap, "仓库  %u级 ·可扩容家具", (unsigned)s_g->stash_lv);
+        break;
+    case UI_SURVIVORS:
+        snprintf(buf, cap, "幸存者  %u人", (unsigned)s_g->pop);
+        break;
+    case UI_EQUIP:
+        snprintf(buf, cap, "装备  背包手枪");
+        break;
+    case UI_BUILD:
+        snprintf(buf, cap, "建设  设施与工具");
+        break;
+    case UI_PROJECTS:
+        snprintf(buf, cap, "计划  献料建顶");
+        break;
+    case UI_TRADE:
+        if (ash_game_trade2_available(s_g)) snprintf(buf, cap, "交易  渡口今日可换");
+        else if (ash_game_trade_available(s_g)) snprintf(buf, cap, "交易  铁棚今日可换");
+        else if (ash_game_camp2_open(s_g) || ash_game_camp_open(s_g)) snprintf(buf, cap, "交易  今日已换");
+        else snprintf(buf, cap, "交易  未通联");
+        break;
+    case UI_QUEST: {
+        const char *qn = NULL;
+        for (uint8_t q = 0; q < ASHBOX_QUEST_N; q++) {
+            bool done = (q < ASHBOX_QUEST_CORE) ? (s_g->quest_done[q] != 0) : (s_g->quest2_done != 0);
+            if (done) continue;
+            qn = ash_game_quest_name(q);
+            break;
+        }
+        if (qn) snprintf(buf, cap, "线索  %s", qn);
+        else snprintf(buf, cap, "线索");
+        break;
+    }
+    case UI_CODEX:
+        snprintf(buf, cap, "观测  已记%u/%u",
+                 (unsigned)ash_codex_count(s_g), (unsigned)ASH_CODEX_COUNT);
+        break;
+    case UI_ACHIEVE: {
+        unsigned got = 0;
+        for (uint16_t b = 1; b <= ASH_ACH_ALL_MASK; b <<= 1) {
+            if (ashbox_meta_has(&s_meta, b)) got++;
+        }
+        snprintf(buf, cap, "成就  已获%u/%u", got, (unsigned)ASH_ACH_COUNT);
+        break;
+    }
+    case UI_JOURNAL:
+        snprintf(buf, cap, "纪事  最近%u条", (unsigned)s_g->journal_count);
+        break;
+    case UI_SETTINGS:
+        snprintf(buf, cap, "设置  亮度 · 备份");
+        break;
+    case UI_HELP:
+        snprintf(buf, cap, "帮助  规则与操作");
+        break;
+    default:
+        snprintf(buf, cap, "?");
+        break;
+    }
+}
+
 static void paint_hub(void)
 {
     s_page = UI_HUB;
     show_home_chrome(false);
     lv_label_set_text(s_title, "据点");
     char buf[64];
-    int ready = ash_game_farm_ready_count(s_g);
-    const char *names[] = {"日勤", "菜地", "资源", "仓库", "幸存者", "装备", "建设", "交易", "站令",
-                           "线索", "成就", "纪事", "设置", "帮助", "事项", "观测"};
-    int top = hub_scroll_top(s_list_sel, HUB_COUNT);
+    const char *labels[HUB_COUNT] = {"今日", "站务", "档案", "系统"};
+    const char *subs[HUB_COUNT] = {
+        "远征 / 战报 / 夜间 / 守听",
+        "日勤 / 菜地 / 建设 / 交易",
+        "线索 / 观测 / 成就 / 纪事",
+        "设置 / 帮助",
+    };
+    if (s_list_sel < 0) s_list_sel = 0;
+    if (s_list_sel >= HUB_COUNT) s_list_sel = HUB_COUNT - 1;
+    if (ash_game_leg_waiting(s_g)) snprintf(buf, sizeof(buf), "今日  远征停住");
+    else if (ash_game_crisis_pending(s_g)) snprintf(buf, sizeof(buf), "今日  守夜");
+    else if (s_g->report.pending) snprintf(buf, sizeof(buf), "今日  战报待抉择");
+    else snprintf(buf, sizeof(buf), "今日  远征/战报/夜间");
     for (int i = 0; i < HUB_COUNT; i++) {
-        lv_obj_add_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_list_labels[i], i == 0 ? buf : labels[i]);
+        lv_obj_set_style_text_color(s_list_labels[i], lv_color_hex(COL_TEXT), 0);
         lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
         lv_obj_set_width(s_list_labels[i], 188);
         lv_obj_set_height(s_list_labels[i], 18);
-        if (i == 0) {
-            unsigned left = ash_game_duty_left(s_g);
-            if (s_g->exp.active) snprintf(buf, sizeof(buf), "日勤  远征中不可");
-            else if (left > 0) snprintf(buf, sizeof(buf), "日勤  今日余%u", left);
-            else snprintf(buf, sizeof(buf), "日勤  今日已满");
-        } else if (i == 1) {
-            if (!ash_game_farm_unlocked(s_g)) snprintf(buf, sizeof(buf), "菜地  食堂升到2级");
-            else if (ready > 0) snprintf(buf, sizeof(buf), "菜地  可收%d块田地", ready);
-            else if (ash_game_root_unlocked(s_g))
-                snprintf(buf, sizeof(buf), "菜地  稻谷快/红薯饱");
-            else
-                snprintf(buf, sizeof(buf), "菜地  可种稻谷");
-        } else if (i == 2) {
-            snprintf(buf, sizeof(buf), "资源  仓位%u/%u",
-                     (unsigned)ash_game_stash_slots_used(s_g),
-                     (unsigned)ash_game_stash_slots_cap(s_g));
-        } else if (i == 3) {
-            snprintf(buf, sizeof(buf), "仓库  %u级 ·可扩容家具", (unsigned)s_g->stash_lv);
-        } else if (i == 4) {
-            snprintf(buf, sizeof(buf), "幸存者  %u人", (unsigned)s_g->pop);
-        } else if (i == 5) {
-            snprintf(buf, sizeof(buf), "装备  背包手枪");
-        } else if (i == 7) {
-            if (ash_game_trade2_available(s_g))
-                snprintf(buf, sizeof(buf), "交易  渡口今日可换");
-            else if (ash_game_trade_available(s_g))
-                snprintf(buf, sizeof(buf), "交易  铁棚今日可换");
-            else if (ash_game_camp2_open(s_g) || ash_game_camp_open(s_g))
-                snprintf(buf, sizeof(buf), "交易  今日已换");
-            else
-                snprintf(buf, sizeof(buf), "交易  未通联");
-        } else if (i == 8) {
-            snprintf(buf, sizeof(buf), "站令  %s",
-                     ash_game_order_name((ash_night_order_t)s_g->night_order));
-        } else if (i == 9) {
-            const char *qn = NULL;
-            for (uint8_t q = 0; q < ASHBOX_QUEST_N; q++) {
-                bool done = (q < ASHBOX_QUEST_CORE) ? (s_g->quest_done[q] != 0)
-                                                    : (s_g->quest2_done != 0);
-                if (done) continue;
-                qn = ash_game_quest_name(q);
-                break;
-            }
-            if (qn) snprintf(buf, sizeof(buf), "线索  %s", qn);
-            else snprintf(buf, sizeof(buf), "线索");
-        } else if (i == 10) {
-            unsigned got = 0;
-            for (uint16_t b = 1; b <= ASH_ACH_ALL_MASK; b <<= 1) {
-                if (ashbox_meta_has(&s_meta, b)) got++;
-            }
-            snprintf(buf, sizeof(buf), "成就  已获%u/%u", got, (unsigned)ASH_ACH_COUNT);
-        } else if (i == 14) {
-            snprintf(buf, sizeof(buf), "事项  远征/战报/夜勤/天时");
-        } else if (i == 15) {
-            snprintf(buf, sizeof(buf), "观测  已记%u/%u",
-                     (unsigned)ash_codex_count(s_g), (unsigned)ASH_CODEX_COUNT);
-        } else {
-            snprintf(buf, sizeof(buf), "%s", names[i]);
-        }
-        lv_label_set_text(s_list_labels[i], buf);
-        lv_obj_set_style_text_color(s_list_labels[i], lv_color_hex(COL_TEXT), 0);
-        if (i < top || i >= top + HUB_VIEW) {
-            lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
-            continue;
-        }
-        int vis = i - top;
-        lv_obj_set_size(s_list_rows[i], 208, HUB_ROW_H - 4);
-        lv_obj_set_pos(s_list_rows[i], 12, 20 + vis * HUB_ROW_H);
-        lv_obj_set_pos(s_list_labels[i], 10, 6);
+        lv_label_set_text(s_list_subs[i], subs[i]);
+        lv_obj_set_style_text_color(s_list_subs[i], lv_color_hex(COL_MUTED), 0);
+        lv_label_set_long_mode(s_list_subs[i], LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_set_width(s_list_subs[i], 188);
+        lv_obj_set_height(s_list_subs[i], 18); /* font line height is 18; 16 clipped descenders */
+        lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_size(s_list_rows[i], 208, 44);
+        lv_obj_set_pos(s_list_rows[i], 12, 20 + i * 48);
+        lv_obj_set_pos(s_list_labels[i], 14, 3);
+        lv_obj_set_pos(s_list_subs[i], 14, 23);
         lv_obj_clear_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
         bool sel = (s_list_sel == i);
-        lv_obj_set_style_border_color(s_list_rows[i],
-                                      lv_color_hex(sel ? COL_AMBER : COL_LINE), 0);
-        lv_obj_set_style_bg_color(s_list_rows[i],
-                                  lv_color_hex(sel ? COL_SEL : COL_SURF), 0);
+        lv_obj_set_style_border_color(s_list_rows[i], lv_color_hex(sel ? COL_AMBER : COL_LINE), 0);
+        lv_obj_set_style_bg_color(s_list_rows[i], lv_color_hex(sel ? COL_SEL : COL_SURF), 0);
     }
     for (int i = HUB_COUNT; i < ASH_LIST_MAX; i++) {
         lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
     }
-    paint_hub_scrollbar(s_list_sel, HUB_COUNT, HUB_VIEW);
+    hide_list_scrollbar();
     set_modal_visible(false);
     set_bar_dual(false);
     set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "进入", true, true);
     s_focus = 0;
-    if (s_list_sel == 0) lv_label_set_text(s_hint, "醒着可做日勤 · 做完疲劳+5");
-    else if (s_list_sel == 1) lv_label_set_text(s_hint, "稻谷约1天30 · 红薯约3天240");
-    else if (s_list_sel == 4) lv_label_set_text(s_hint, "可派工 · 也可请出营地");
-    else if (s_list_sel == 9) lv_label_set_text(s_hint, "每条线一天只往前一步");
-    else lv_label_set_text(s_hint, "每项点进完整一页 · 长按返回");
+    if (s_list_sel == 0) lv_label_set_text(s_hint, "今日要事都在这里");
+    else if (s_list_sel == 1) lv_label_set_text(s_hint, "日常经营与建造 · 计划也在这里");
+    else if (s_list_sel == 2) lv_label_set_text(s_hint, "线索与记录");
+    else lv_label_set_text(s_hint, "设置与帮助");
+}
+
+void paint_hub_group(void)
+{
+    s_page = UI_HUB_GROUP;
+    show_home_chrome(false);
+    lv_label_set_text(s_title, hub_group_title());
+    int n = hub_group_count();
+    if (s_list_sel < 0) s_list_sel = 0;
+    if (s_list_sel >= n) s_list_sel = n - 1;
+    if (s_list_sel < 0) s_list_sel = 0;
+    int view = 5;
+    if (n < view) view = n;
+    int top = list_scroll_top(s_list_sel, n, view);
+    for (int slot = 0; slot < ASH_LIST_MAX; slot++) lv_obj_add_flag(s_list_rows[slot], LV_OBJ_FLAG_HIDDEN);
+    for (int slot = 0; slot < view; slot++) {
+        int i = top + slot;
+        if (i >= n) break;
+        char buf[64];
+        hub_item_label(hub_group_item(i), buf, sizeof(buf));
+        lv_label_set_text(s_list_labels[slot], buf);
+        lv_obj_add_flag(s_list_subs[slot], LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_long_mode(s_list_labels[slot], LV_LABEL_LONG_MODE_CLIP);
+        lv_obj_set_width(s_list_labels[slot], 196);
+        lv_obj_set_size(s_list_rows[slot], 216, 34);
+        lv_obj_set_pos(s_list_rows[slot], 12, 8 + slot * 36);
+        lv_obj_set_pos(s_list_labels[slot], 14, 6);
+        lv_obj_clear_flag(s_list_rows[slot], LV_OBJ_FLAG_HIDDEN);
+        bool sel = (s_list_sel == i);
+        lv_obj_set_style_border_color(s_list_rows[slot], lv_color_hex(sel ? COL_AMBER : COL_LINE), 0);
+        lv_obj_set_style_bg_color(s_list_rows[slot], lv_color_hex(sel ? COL_SEL : COL_SURF), 0);
+    }
+    paint_hub_scrollbar(s_list_sel, n, view);
+    set_bar_dual(false);
+    set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "进入", true, true);
+    s_focus = 0;
+    if (s_hub_group == 1) lv_label_set_text(s_hint, "日常经营 · 计划可献料");
+    else if (s_hub_group == 2) lv_label_set_text(s_hint, "线索与记录 · 长按返回");
+    else lv_label_set_text(s_hint, "设置与帮助 · 长按返回");
 }
 
 static void paint_order(void);
@@ -1829,7 +1988,7 @@ static void paint_plan(void)
 {
     s_page = UI_PLAN;
     show_home_chrome(false);
-    lv_label_set_text(s_title, "事项");
+    lv_label_set_text(s_title, "今日");
     for (int i = 0; i < PLAN_ROWS; i++) {
         lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
         lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
@@ -1837,10 +1996,12 @@ static void paint_plan(void)
         lv_obj_set_width(s_list_labels[i], 196);
         lv_obj_set_width(s_list_subs[i], 196);
         lv_obj_set_height(s_list_labels[i], 18);
-        lv_obj_set_size(s_list_rows[i], 216, 36);
-        lv_obj_set_pos(s_list_rows[i], 12, 4 + i * 36);
-        lv_obj_set_pos(s_list_labels[i], 10, 1);
-        lv_obj_set_pos(s_list_subs[i], 10, 17);
+        lv_obj_set_size(s_list_rows[i], 216, 38);
+        lv_obj_set_pos(s_list_rows[i], 12, i * 38);
+        lv_obj_set_pos(s_list_labels[i], 14, 1);
+        lv_obj_set_pos(s_list_subs[i], 14, 19);
+        lv_obj_set_height(s_list_labels[i], 18);
+        lv_obj_set_height(s_list_subs[i], 18);
     }
     for (int i = PLAN_ROWS; i < ASH_LIST_MAX; i++) lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
 
@@ -1859,7 +2020,7 @@ static void paint_plan(void)
         snprintf(sub, sizeof(sub), "归来还没选");
     } else if (s_g->exp.active) {
         snprintf(line, sizeof(line), "远征中");
-        snprintf(sub, sizeof(sub), "回主页可继续走或收手");
+        snprintf(sub, sizeof(sub), "到段界后可继续或收手");
     } else if (ash_game_can_depart(s_g)) {
         snprintf(line, sizeof(line), "远征  可出发");
         snprintf(sub, sizeof(sub), "轻装/撬棍/手枪 三档");
@@ -1970,10 +2131,12 @@ static void paint_phenom(void)
         lv_obj_set_width(s_list_labels[i], 196);
         lv_obj_set_width(s_list_subs[i], 196);
         lv_obj_set_height(s_list_labels[i], 18);
-        lv_obj_set_size(s_list_rows[i], 216, 36);
-        lv_obj_set_pos(s_list_rows[i], 12, 4 + i * 36);
-        lv_obj_set_pos(s_list_labels[i], 10, 1);
-        lv_obj_set_pos(s_list_subs[i], 10, 17);
+        lv_obj_set_size(s_list_rows[i], 216, 42);
+        lv_obj_set_pos(s_list_rows[i], 12, 4 + i * 44);
+        lv_obj_set_pos(s_list_labels[i], 14, 2);
+        lv_obj_set_pos(s_list_subs[i], 14, 21);
+        lv_obj_set_height(s_list_labels[i], 18);
+        lv_obj_set_height(s_list_subs[i], 18);
         lv_obj_set_style_text_color(s_list_labels[i],
                                     lv_color_hex(p && p->danger ? COL_DANGER : COL_TEXT), 0);
     }
@@ -2016,7 +2179,7 @@ static void paint_codex(void)
         lv_obj_set_height(s_list_labels[i], 18);
         lv_obj_set_size(s_list_rows[i], 216, 36);
         lv_obj_set_pos(s_list_rows[i], 12, 8 + i * 38);
-        lv_obj_set_pos(s_list_labels[i], 10, 9);
+        lv_obj_set_pos(s_list_labels[i], 14, 9);
         lv_label_set_text(s_list_labels[i], buf);
         lv_obj_set_style_text_color(s_list_labels[i], lv_color_hex(COL_TEXT), 0);
         lv_obj_clear_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
@@ -2050,10 +2213,12 @@ static void paint_codex_list(void)
         lv_obj_set_width(s_list_labels[i], 196);
         lv_obj_set_width(s_list_subs[i], 196);
         lv_obj_set_height(s_list_labels[i], 18);
-        lv_obj_set_size(s_list_rows[i], 216, 36);
-        lv_obj_set_pos(s_list_rows[i], 12, 4 + i * 36);
-        lv_obj_set_pos(s_list_labels[i], 10, 1);
-        lv_obj_set_pos(s_list_subs[i], 10, 17);
+        lv_obj_set_size(s_list_rows[i], 216, 38);
+        lv_obj_set_pos(s_list_rows[i], 12, i * 38);
+        lv_obj_set_pos(s_list_labels[i], 14, 1);
+        lv_obj_set_pos(s_list_subs[i], 14, 19);
+        lv_obj_set_height(s_list_labels[i], 18);
+        lv_obj_set_height(s_list_subs[i], 18);
         lv_label_set_text(s_list_labels[i], has && e ? e->title : "???");
         lv_label_set_text(s_list_subs[i], has && e ? e->source : "尚未记录");
         lv_obj_set_style_text_color(s_list_labels[i],
@@ -2089,7 +2254,7 @@ static void paint_codex_entry(void)
     lv_obj_set_height(s_list_labels[0], 190);
     lv_obj_set_size(s_list_rows[0], 216, 200);
     lv_obj_set_pos(s_list_rows[0], 12, 8);
-    lv_obj_set_pos(s_list_labels[0], 10, 8);
+    lv_obj_set_pos(s_list_labels[0], 14, 8);
     lv_label_set_text(s_list_labels[0], s_codex_text);
     lv_obj_set_style_text_color(s_list_labels[0], lv_color_hex(COL_TEXT), 0);
     for (int i = 1; i < ASH_LIST_MAX; i++) lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
@@ -2098,7 +2263,7 @@ static void paint_codex_entry(void)
     set_bar_dual(false);
     set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "返回", true, true);
     s_focus = 0;
-    lv_label_set_text(s_hint, "长按返回 · 上下翻卷");
+    lv_label_set_text(s_hint, "长按返回");
 }
 
 static const ash_talk_t *s_talk;
@@ -2116,7 +2281,7 @@ static void paint_talk(void)
     lv_obj_set_height(s_list_labels[0], 124);
     lv_obj_set_size(s_list_rows[0], 216, 140);
     lv_obj_set_pos(s_list_rows[0], 12, 4);
-    lv_obj_set_pos(s_list_labels[0], 10, 6);
+    lv_obj_set_pos(s_list_labels[0], 14, 6);
     lv_label_set_text(s_list_labels[0], s_talk ? s_talk->body : "");
     lv_obj_set_style_text_color(s_list_labels[0], lv_color_hex(COL_TEXT), 0);
     lv_obj_set_style_border_color(s_list_rows[0], lv_color_hex(COL_LINE), 0);
@@ -2130,7 +2295,7 @@ static void paint_talk(void)
         lv_obj_set_height(s_list_labels[i + 1], 18);
         lv_obj_set_size(s_list_rows[i + 1], 216, 36);
         lv_obj_set_pos(s_list_rows[i + 1], 12, 150 + i * 44);
-        lv_obj_set_pos(s_list_labels[i + 1], 10, 9);
+        lv_obj_set_pos(s_list_labels[i + 1], 14, 9);
         lv_label_set_text(s_list_labels[i + 1], s_talk ? s_talk->opt[i].text : "");
         lv_obj_set_style_text_color(s_list_labels[i + 1], lv_color_hex(COL_TEXT), 0);
         lv_obj_set_style_border_color(s_list_rows[i + 1],
@@ -2179,8 +2344,8 @@ static void paint_radio(void)
                                     lv_color_hex(left >= ASH_RADIO_DAILY ? COL_MUTED : COL_TEXT), 0);
         lv_obj_set_size(s_list_rows[i], 216, 42);
         lv_obj_set_pos(s_list_rows[i], 12, 8 + i * 46);
-        lv_obj_set_pos(s_list_labels[i], 10, 2);
-        lv_obj_set_pos(s_list_subs[i], 10, 22);
+        lv_obj_set_pos(s_list_labels[i], 14, 2);
+        lv_obj_set_pos(s_list_subs[i], 14, 22);
         lv_obj_set_height(s_list_labels[i], 18);
         lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
         bool sel = (s_list_sel == i);
@@ -2217,7 +2382,7 @@ static void paint_tune(void)
         lv_obj_set_style_text_color(s_list_labels[i], lv_color_hex(COL_TEXT), 0);
         lv_obj_set_size(s_list_rows[i], 216, 26);
         lv_obj_set_pos(s_list_rows[i], 12, 4 + i * 28);
-        lv_obj_set_pos(s_list_labels[i], 10, 3);
+        lv_obj_set_pos(s_list_labels[i], 14, 3);
         lv_obj_set_height(s_list_labels[i], 18);
         lv_label_set_long_mode(s_list_labels[i], LV_LABEL_LONG_MODE_CLIP);
         bool sel = (s_list_sel == i);
@@ -2246,7 +2411,7 @@ static void paint_radio_result(void)
     lv_obj_set_height(s_list_labels[0], 180);
     lv_obj_set_size(s_list_rows[0], 216, 190);
     lv_obj_set_pos(s_list_rows[0], 12, 4);
-    lv_obj_set_pos(s_list_labels[0], 10, 6);
+    lv_obj_set_pos(s_list_labels[0], 14, 6);
     char text[384];
     snprintf(text, sizeof(text), "%s\n\n%s\n\n%s",
              ash_radio_result_title(s_radio_kind),
@@ -2327,10 +2492,12 @@ static void paint_res(void)
         if (cost) set_cost_color(s_list_subs[slot], enough);
         else lv_obj_set_style_text_color(s_list_subs[slot], lv_color_hex(COL_MUTED), 0);
         lv_obj_clear_flag(s_list_subs[slot], LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_size(s_list_rows[slot], 216, 34);
-        lv_obj_set_pos(s_list_rows[slot], 12, 8 + slot * 36);
-        lv_obj_set_pos(s_list_labels[slot], 10, 1);
-        lv_obj_set_pos(s_list_subs[slot], 10, 16);
+        lv_obj_set_size(s_list_rows[slot], 216, 42);
+        lv_obj_set_pos(s_list_rows[slot], 12, 8 + slot * 44);
+        lv_obj_set_pos(s_list_labels[slot], 14, 2);
+        lv_obj_set_pos(s_list_subs[slot], 14, 21);
+        lv_obj_set_height(s_list_labels[slot], 18);
+        lv_obj_set_height(s_list_subs[slot], 18);
         lv_obj_clear_flag(s_list_rows[slot], LV_OBJ_FLAG_HIDDEN);
         bool sel = (s_list_sel == i);
         lv_obj_set_style_border_color(s_list_rows[slot],
@@ -2384,8 +2551,8 @@ static void paint_order(void)
         lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_size(s_list_rows[i], 216, 42);
         lv_obj_set_pos(s_list_rows[i], 12, 8 + i * 46);
-        lv_obj_set_pos(s_list_labels[i], 10, 2);
-        lv_obj_set_pos(s_list_subs[i], 10, 22);
+        lv_obj_set_pos(s_list_labels[i], 14, 2);
+        lv_obj_set_pos(s_list_subs[i], 14, 22);
     }
     for (int i = ASH_ORDER_COUNT; i < ASH_LIST_MAX; i++) {
         lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
@@ -2409,7 +2576,7 @@ static void paint_journal(void)
         lv_obj_add_flag(s_list_subs[0], LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_size(s_list_rows[0], 216, 30);
         lv_obj_set_pos(s_list_rows[0], 12, 40);
-        lv_obj_set_pos(s_list_labels[0], 10, 6);
+        lv_obj_set_pos(s_list_labels[0], 14, 6);
         lv_obj_clear_flag(s_list_rows[0], LV_OBJ_FLAG_HIDDEN);
         for (int i = 1; i < ASH_LIST_MAX; i++) lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
         hide_list_scrollbar();
@@ -2436,9 +2603,8 @@ static void paint_journal(void)
             lv_obj_set_style_anim_duration(s_list_labels[slot], 8000, LV_PART_MAIN);
             lv_obj_set_size(s_list_rows[slot], 216, 28);
             lv_obj_set_pos(s_list_rows[slot], 12, 12 + slot * 30);
-            lv_obj_set_pos(s_list_labels[slot], 10, 5);
+            lv_obj_set_pos(s_list_labels[slot], 14, 5);
             lv_obj_clear_flag(s_list_rows[slot], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_style_clip_corner(s_list_rows[slot], true, 0);
             lv_obj_set_style_border_color(s_list_rows[slot],
                                           lv_color_hex(sel ? COL_AMBER : COL_LINE), 0);
             lv_obj_set_style_bg_color(s_list_rows[slot],
@@ -2472,8 +2638,8 @@ static void paint_quest(void)
         lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_size(s_list_rows[i], 216, 50);
         lv_obj_set_pos(s_list_rows[i], 12, 16 + i * 54);
-        lv_obj_set_pos(s_list_labels[i], 10, 6);
-        lv_obj_set_pos(s_list_subs[i], 10, 28);
+        lv_obj_set_pos(s_list_labels[i], 14, 6);
+        lv_obj_set_pos(s_list_subs[i], 14, 28);
     }
     paint_list_sel(ASHBOX_QUEST_N);
     set_modal_visible(false);
@@ -2520,8 +2686,8 @@ static void paint_crisis(void)
         lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_size(s_list_rows[i], 216, 50);
         lv_obj_set_pos(s_list_rows[i], 12, 16 + i * 54);
-        lv_obj_set_pos(s_list_labels[i], 10, 6);
-        lv_obj_set_pos(s_list_subs[i], 10, 28);
+        lv_obj_set_pos(s_list_labels[i], 14, 6);
+        lv_obj_set_pos(s_list_subs[i], 14, 28);
     }
     paint_list_sel(ASH_CRISIS_COUNT);
     set_modal_visible(false);
@@ -2562,8 +2728,8 @@ static void paint_report(void)
             lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_size(s_list_rows[i], 216, 48);
             lv_obj_set_pos(s_list_rows[i], 12, 12 + i * 52);
-            lv_obj_set_pos(s_list_labels[i], 10, 4);
-            lv_obj_set_pos(s_list_subs[i], 10, 26);
+            lv_obj_set_pos(s_list_labels[i], 14, 4);
+            lv_obj_set_pos(s_list_subs[i], 14, 26);
         }
         paint_list_sel(n);
         set_bar_dual(false);
@@ -2632,7 +2798,7 @@ static void build_screen(void)
     lv_obj_set_pos(s_alert, 156, 1);
     lv_obj_set_style_bg_opa(s_alert, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(s_alert, lv_color_hex(COL_AMBER), 0);
-    lv_obj_set_style_radius(s_alert, 0, 0);
+    lv_obj_set_style_radius(s_alert, BSP_LVGL_SCREEN_RADIUS, 0);
     lv_obj_set_style_text_align(s_alert, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(s_alert, LV_LABEL_LONG_MODE_CLIP);
     lv_obj_add_flag(s_alert, LV_OBJ_FLAG_HIDDEN);
@@ -2723,13 +2889,17 @@ static void build_screen(void)
     lv_bar_set_range(s_threat_bar, 0, 100);
     lv_obj_set_style_bg_color(s_threat_bar, lv_color_hex(COL_SURF2), LV_PART_MAIN);
     lv_obj_set_style_bg_color(s_threat_bar, lv_color_hex(COL_LINE), LV_PART_INDICATOR);
-    lv_obj_set_style_radius(s_threat_bar, 0, 0);
+    lv_obj_set_style_radius(s_threat_bar, BSP_LVGL_SCREEN_RADIUS, 0);
     lv_obj_set_style_pad_all(s_threat_bar, 0, 0);
 
     lv_obj_t *now = lv_obj_create(s_home_layer);
     lv_obj_set_size(now, 240, NOW_BAND_H);
     lv_obj_set_pos(now, 0, STAGE_H);
     style_panel(now, COL_SURF);
+    /* Full-bleed HUD strip: its 3 text rows reach the left edge at y=1, so a
+     * 30 px inner radius would put "水/粮" outside the fill. The screen mask
+     * already rounds the outside corners; keep this strip full-width. */
+    lv_obj_set_style_radius(now, 0, 0);
     lv_obj_set_style_border_width(now, 0, 0);
     lv_obj_set_style_pad_all(now, 0, 0);
 
@@ -2780,7 +2950,7 @@ static void build_screen(void)
         lv_obj_set_style_bg_color(s_radio_bar[i], lv_color_hex(COL_AMBER), 0);
         lv_obj_set_style_bg_opa(s_radio_bar[i], 90, 0);
         lv_obj_set_style_border_width(s_radio_bar[i], 0, 0);
-        lv_obj_set_style_radius(s_radio_bar[i], 0, 0);
+        lv_obj_set_style_radius(s_radio_bar[i], BSP_LVGL_SCREEN_RADIUS, 0);
         lv_obj_set_style_pad_all(s_radio_bar[i], 0, 0);
         lv_obj_clear_flag(s_radio_bar[i], LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_clear_flag(s_radio_bar[i], LV_OBJ_FLAG_CLICKABLE);
@@ -2816,12 +2986,11 @@ static void build_screen(void)
         lv_obj_set_size(s_list_rows[i], 216, 36);
         lv_obj_set_pos(s_list_rows[i], 12, 8 + i * 40);
         style_panel(s_list_rows[i], COL_SURF);
-        lv_obj_set_style_clip_corner(s_list_rows[i], true, 0);
         s_list_labels[i] = mk_label(s_list_rows[i], "", COL_TEXT);
-        lv_obj_set_pos(s_list_labels[i], 10, 8);
+        lv_obj_set_pos(s_list_labels[i], 14, 8);
         lv_obj_set_width(s_list_labels[i], 196);
         s_list_subs[i] = mk_label(s_list_rows[i], "", COL_MUTED);
-        lv_obj_set_pos(s_list_subs[i], 10, 28);
+        lv_obj_set_pos(s_list_subs[i], 14, 28);
         lv_obj_set_width(s_list_subs[i], 196);
         lv_obj_add_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
@@ -2832,7 +3001,7 @@ static void build_screen(void)
     lv_obj_set_pos(s_scroll_track, 232, 20);
     lv_obj_set_style_bg_color(s_scroll_track, lv_color_hex(COL_SURF2), 0);
     lv_obj_set_style_bg_opa(s_scroll_track, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(s_scroll_track, 0, 0);
+    lv_obj_set_style_radius(s_scroll_track, BSP_LVGL_SCREEN_RADIUS, 0);
     lv_obj_set_style_border_width(s_scroll_track, 0, 0);
     lv_obj_set_style_pad_all(s_scroll_track, 0, 0);
     lv_obj_clear_flag(s_scroll_track, LV_OBJ_FLAG_SCROLLABLE);
@@ -2842,7 +3011,7 @@ static void build_screen(void)
     lv_obj_set_pos(s_scroll_thumb, 0, 0);
     lv_obj_set_style_bg_color(s_scroll_thumb, lv_color_hex(COL_AMBER), 0);
     lv_obj_set_style_bg_opa(s_scroll_thumb, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(s_scroll_thumb, 0, 0);
+    lv_obj_set_style_radius(s_scroll_thumb, BSP_LVGL_SCREEN_RADIUS, 0);
     lv_obj_set_style_border_width(s_scroll_thumb, 0, 0);
     lv_obj_set_style_pad_all(s_scroll_thumb, 0, 0);
     lv_obj_clear_flag(s_scroll_thumb, LV_OBJ_FLAG_SCROLLABLE);
@@ -2858,7 +3027,7 @@ static void build_screen(void)
     lv_obj_set_size(bar, 240, BAR_H);
     lv_obj_set_pos(bar, 0, BAR_Y);
     style_panel(bar, COL_SURF);
-    lv_obj_set_style_radius(bar, 0, 0);
+    /* style_panel already applies the 30 px radius; let the sheet reach y=320. */
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
     s_btn_pri = lv_obj_create(bar);
@@ -2995,6 +3164,7 @@ void ashbox_ui_mark_save_urgent(void)
 void ashbox_ui_after_leg(bool withdrew)
 {
     if (withdrew && s_g->report.pending) {
+        s_event_parent = UI_HOME;
         s_list_sel = -1;
         enter_page(UI_REPORT);
         paint_report();
@@ -3148,6 +3318,7 @@ static void activate_home(void)
         }
         if (ash_game_crisis_pending(s_g)) {
             ashbox_sfx_play(ASH_SFX_CONFIRM);
+            s_event_parent = UI_HOME;
             s_list_sel = 0;
             enter_page(UI_CRISIS);
             paint_crisis();
@@ -3155,9 +3326,18 @@ static void activate_home(void)
         }
         if (s_g->report.pending) {
             ashbox_sfx_play(ASH_SFX_CONFIRM);
+            s_event_parent = UI_HOME;
             s_list_sel = -1; /* the branch must be chosen, never inherited from home focus */
             enter_page(UI_REPORT);
             paint_report();
+            return;
+        }
+        if (ash_game_leg_waiting(s_g)) {
+            ashbox_sfx_play(ASH_SFX_CONFIRM);
+            s_leg_parent = UI_HOME;
+            s_list_sel = 0;
+            enter_page(UI_LEG);
+            paint_leg();
             return;
         }
         if (ash_game_chore_pending(s_g)) {
@@ -3172,6 +3352,7 @@ static void activate_home(void)
         }
         if (ash_game_can_depart(s_g)) {
             ashbox_sfx_play(ASH_SFX_CONFIRM);
+            s_pick_parent = UI_HOME;
             s_depart_step = 0;
             s_list_sel = 0;
             enter_page(UI_PICK);
@@ -3397,10 +3578,12 @@ static void paint_duty(void)
         lv_obj_set_width(s_list_labels[i], 196);
         lv_obj_set_width(s_list_subs[i], 196);
         lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_size(s_list_rows[i], 216, 40);
-        lv_obj_set_pos(s_list_rows[i], 12, 16 + i * 44);
-        lv_obj_set_pos(s_list_labels[i], 10, 2);
-        lv_obj_set_pos(s_list_subs[i], 10, 20);
+        lv_obj_set_size(s_list_rows[i], 216, 42);
+        lv_obj_set_pos(s_list_rows[i], 12, 8 + i * 44);
+        lv_obj_set_pos(s_list_labels[i], 14, 2);
+        lv_obj_set_pos(s_list_subs[i], 14, 21);
+        lv_obj_set_height(s_list_labels[i], 18);
+        lv_obj_set_height(s_list_subs[i], 18);
         lv_obj_clear_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
         bool sel = (s_list_sel == i);
         lv_obj_set_style_border_color(s_list_rows[i],
@@ -3455,6 +3638,49 @@ static void maybe_coach(uint8_t bit, const char *line0, const char *line1)
     s_block_modal = true;
 }
 
+static void activate_hub_group(void)
+{
+    if (ok_guard_blocks()) {
+        ESP_LOGI(TAG, "ignore OK (page-enter guard)");
+        return;
+    }
+    int n = hub_group_count();
+    if (s_list_sel < 0 || s_list_sel >= n) {
+        ashbox_sfx_play(ASH_SFX_WARN);
+        return;
+    }
+    ui_page_t page = hub_group_item(s_list_sel);
+    ashbox_sfx_play(ASH_SFX_CONFIRM);
+    s_list_sel = 0;
+    switch (page) {
+    case UI_DUTY: enter_page(UI_DUTY); paint_duty(); break;
+    case UI_FARM:
+        enter_page(UI_FARM); paint_farm();
+        maybe_coach(ASH_COACH_FARM, "稻谷约1天基础45", "红薯约2天基础150 · 田作会累");
+        break;
+    case UI_RES: enter_page(UI_RES); paint_res(); break;
+    case UI_STASH: enter_page(UI_STASH); paint_stash(); break;
+    case UI_SURVIVORS: enter_page(UI_SURVIVORS); paint_survivors(); break;
+    case UI_EQUIP: enter_page(UI_EQUIP); paint_equip(); break;
+    case UI_BUILD:
+        enter_page(UI_BUILD); paint_build();
+        maybe_coach(ASH_COACH_BUILD, "零件盖建设", "余烬攒满3可开闸去猎场");
+        break;
+    case UI_PROJECTS: enter_page(UI_PROJECTS); paint_projects(); break;
+    case UI_TRADE:
+        enter_page(UI_TRADE); paint_trade();
+        maybe_coach(ASH_COACH_TRADE, "铁棚渡口一天限换", "声望高了同日还能再换一次");
+        break;
+    case UI_QUEST: enter_page(UI_QUEST); paint_quest(); break;
+    case UI_CODEX: enter_page(UI_CODEX); paint_codex(); break;
+    case UI_ACHIEVE: enter_page(UI_ACHIEVE); paint_achieve(); break;
+    case UI_JOURNAL: enter_page(UI_JOURNAL); paint_journal(); break;
+    case UI_SETTINGS: enter_page(UI_SETTINGS); paint_settings(); break;
+    case UI_HELP: enter_page(UI_HELP); paint_help(); break;
+    default: ashbox_sfx_play(ASH_SFX_WARN); break;
+    }
+}
+
 static void activate_hub(void)
 {
     if (ok_guard_blocks()) {
@@ -3464,101 +3690,18 @@ static void activate_hub(void)
     ashbox_sfx_play(ASH_SFX_CONFIRM);
     if (s_list_sel == 0) {
         s_list_sel = 0;
-        enter_page(UI_DUTY);
-        paint_duty();
-        return;
-    }
-    if (s_list_sel == 1) {
-        s_list_sel = 0;
-        enter_page(UI_FARM);
-        paint_farm();
-        maybe_coach(ASH_COACH_FARM, "稻谷约1天基础30", "红薯约3天基础240 · 田作会累");
-        return;
-    }
-    if (s_list_sel == 2) {
-        s_list_sel = 0;
-        enter_page(UI_RES);
-        paint_res();
-        return;
-    }
-    if (s_list_sel == 3) {
-        s_list_sel = 0;
-        enter_page(UI_STASH);
-        paint_stash();
-        return;
-    }
-    if (s_list_sel == 4) {
-        s_list_sel = 0;
-        enter_page(UI_SURVIVORS);
-        paint_survivors();
-        return;
-    }
-    if (s_list_sel == 5) {
-        s_list_sel = 0;
-        enter_page(UI_EQUIP);
-        paint_equip();
-        return;
-    }
-    if (s_list_sel == 6) {
-        s_list_sel = 0;
-        enter_page(UI_BUILD);
-        paint_build();
-        maybe_coach(ASH_COACH_BUILD, "零件盖建设", "余烬攒满3可开闸去猎场");
-        return;
-    }
-    if (s_list_sel == 7) {
-        s_list_sel = 0;
-        enter_page(UI_TRADE);
-        paint_trade();
-        maybe_coach(ASH_COACH_TRADE, "铁棚渡口一天限换", "声望高了同日还能再换一次");
-        return;
-    }
-    if (s_list_sel == 8) {
-        s_list_sel = (int)s_g->night_order;
-        enter_page(UI_ORDER);
-        paint_order();
-        maybe_coach(ASH_COACH_ORDER, "过夜站令只改深睡这段", "节食省粮 · 戒备压威胁 · 赶工多零件");
-        return;
-    }
-    if (s_list_sel == 9) {
-        s_list_sel = 0;
-        enter_page(UI_QUEST);
-        paint_quest();
-        return;
-    }
-    if (s_list_sel == 10) {
-        s_list_sel = 0;
-        enter_page(UI_ACHIEVE);
-        paint_achieve();
-        return;
-    }
-    if (s_list_sel == 11) {
-        s_list_sel = 0;
-        enter_page(UI_JOURNAL);
-        paint_journal();
-        return;
-    }
-    if (s_list_sel == 12) {
-        s_list_sel = 0;
-        enter_page(UI_SETTINGS);
-        paint_settings();
-        return;
-    }
-    if (s_list_sel == 14) {
-        s_list_sel = 0;
         enter_page(UI_PLAN);
         paint_plan();
         return;
     }
-    if (s_list_sel == 15) {
+    if (s_list_sel >= 1 && s_list_sel <= 3) {
+        s_hub_group = s_list_sel;
         s_list_sel = 0;
-        enter_page(UI_CODEX);
-        paint_codex();
+        enter_page(UI_HUB_GROUP);
+        paint_hub_group();
         return;
     }
     s_list_sel = 0;
-    enter_page(UI_HELP);
-    paint_help();
 }
 
 static void activate_plan(void)
@@ -3567,16 +3710,19 @@ static void activate_plan(void)
     if (s_list_sel == 0) {
         if (ash_game_leg_waiting(s_g)) {
             ashbox_sfx_play(ASH_SFX_CONFIRM);
+            s_leg_parent = UI_PLAN;
             s_list_sel = 0;
             enter_page(UI_LEG);
             paint_leg();
         } else if (ash_game_crisis_pending(s_g)) {
             ashbox_sfx_play(ASH_SFX_CONFIRM);
+            s_event_parent = UI_PLAN;
             s_list_sel = 0;
             enter_page(UI_CRISIS);
             paint_crisis();
         } else if (s_g->report.pending) {
             ashbox_sfx_play(ASH_SFX_CONFIRM);
+            s_event_parent = UI_PLAN;
             s_list_sel = -1;
             enter_page(UI_REPORT);
             paint_report();
@@ -3586,6 +3732,7 @@ static void activate_plan(void)
             paint_home();
         } else if (ash_game_can_depart(s_g)) {
             ashbox_sfx_play(ASH_SFX_CONFIRM);
+            s_pick_parent = UI_PLAN;
             s_depart_step = 0;
             s_list_sel = 0;
             enter_page(UI_PICK);
@@ -3599,6 +3746,7 @@ static void activate_plan(void)
     if (s_list_sel == 1) {
         if (s_g->report.pending) {
             ashbox_sfx_play(ASH_SFX_CONFIRM);
+            s_event_parent = UI_PLAN;
             s_list_sel = -1;
             enter_page(UI_REPORT);
             paint_report();
@@ -3786,12 +3934,6 @@ static void activate_build(void)
             (void)ashbox_meta_store(&s_meta);
         }
     } else if (s_list_sel == 15) ok = ash_game_cycle_build_mode(s_g);
-    else if (s_list_sel == 16) {
-        s_list_sel = 0;
-        enter_page(UI_PROJECTS);
-        paint_projects();
-        return;
-    }
     else if (s_list_sel >= 0 && s_list_sel < 3) ok = ash_game_upgrade(s_g, s_list_sel);
     if (ok) {
         ashbox_sfx_play(ASH_SFX_REWARD);
@@ -3985,6 +4127,19 @@ static void activate_achieve(void)
 static void activate_help(void)
 {
     if (ok_guard_blocks()) return;
+    if (s_list_sel < 0 || s_list_sel >= ashbox_help_chapter_count()) {
+        ashbox_sfx_play(ASH_SFX_WARN);
+        return;
+    }
+    s_help_chapter = s_list_sel;
+    s_list_sel = 0;
+    enter_page(UI_HELP_TOPIC);
+    paint_help_topic();
+}
+
+static void activate_help_topic(void)
+{
+    if (ok_guard_blocks()) return;
     go_back();
 }
 
@@ -4095,6 +4250,9 @@ static void paint_home_focus_only(void)
         set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0),
                 s_g->report.branch_resolved ? "入账" : "抉择", true, s_focus == 0);
         set_btn(s_btn_sec, lv_obj_get_child(s_btn_sec, 0), "据点", true, s_focus == 1);
+    } else if (ash_game_leg_waiting(s_g)) {
+        set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "途中", true, s_focus == 0);
+        set_btn(s_btn_sec, lv_obj_get_child(s_btn_sec, 0), "据点", true, s_focus == 1);
     } else if (s_g->exp.active && ash_game_chore_pending(s_g)) {
         set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), "站事", true, s_focus == 0);
         set_btn(s_btn_sec, lv_obj_get_child(s_btn_sec, 0), "据点", true, s_focus == 1);
@@ -4123,7 +4281,9 @@ static void paint_home_timers_only(void)
     char buf[48];
     refresh_wall_clock();
     refresh_home_day_title();
-    if (s_g->exp.active) {
+    if (ash_game_leg_waiting(s_g)) {
+        set_card_sub_tip("停在段界 · 继续走或收手");
+    } else if (s_g->exp.active) {
         uint32_t rem = s_g->exp.remaining_s;
         if (rem != s_exp_rem_shown) {
             s_exp_rem_shown = rem;
@@ -4146,7 +4306,8 @@ static void on_nav_key(bsp_btn_t btn)
     const int dir = (btn == BSP_BTN_DOWN) ? 1 : -1;
     if (s_page == UI_HOME) {
         bool two = ash_game_crisis_pending(s_g) || s_g->report.pending ||
-                   ash_game_chore_pending(s_g) || ash_game_wanderer_pending(s_g) ||
+                   ash_game_leg_waiting(s_g) || ash_game_chore_pending(s_g) ||
+                   ash_game_wanderer_pending(s_g) ||
                    (ash_game_can_depart(s_g) && !s_g->exp.active) ||
                    (ash_game_duty_available(s_g) && !s_g->exp.active);
         if (two) {
@@ -4173,6 +4334,14 @@ static void on_nav_key(bsp_btn_t btn)
         s_list_sel = wrap(s_list_sel, HUB_COUNT, dir);
         ashbox_sfx_play(ASH_SFX_MOVE);
         paint_hub();
+        return;
+    }
+    if (s_page == UI_HUB_GROUP) {
+        int n = hub_group_count();
+        if (n < 1) n = 1;
+        s_list_sel = wrap(s_list_sel, n, dir);
+        ashbox_sfx_play(ASH_SFX_MOVE);
+        paint_hub_group();
         return;
     }
     if (s_page == UI_BUILD) {
@@ -4330,9 +4499,17 @@ static void on_nav_key(bsp_btn_t btn)
         return;
     }
     if (s_page == UI_HELP) {
-        s_list_sel = wrap(s_list_sel, ASHBOX_HELP_COUNT, dir);
+        s_list_sel = wrap(s_list_sel, ashbox_help_chapter_count(), dir);
         ashbox_sfx_play(ASH_SFX_MOVE);
         paint_help();
+        return;
+    }
+    if (s_page == UI_HELP_TOPIC) {
+        int n = ashbox_help_topic_count();
+        if (n < 1) n = 1;
+        s_list_sel = wrap(s_list_sel, n, dir);
+        ashbox_sfx_play(ASH_SFX_MOVE);
+        paint_help_topic();
         return;
     }
     if (s_page == UI_QUEST) {
@@ -4419,20 +4596,6 @@ void ashbox_ui_on_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         goto key_out;
     }
 
-    /* U-2: long up/down jumps a help section (the only page with 94 rows). */
-    if (ev == BSP_BTN_LONG && (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) && s_page == UI_HELP) {
-        static const int secs[] = {0, 4, 38, 50, 59, 63, 71, 77};
-        int n = (int)(sizeof(secs) / sizeof(secs[0]));
-        int cur = 0;
-        for (int i = 0; i < n; i++) if (s_list_sel >= secs[i]) cur = i;
-        int nxt = (btn == BSP_BTN_DOWN) ? cur + 1 : cur - 1;
-        if (nxt >= n) nxt = 0;
-        if (nxt < 0) nxt = n - 1;
-        s_list_sel = secs[nxt];
-        ashbox_sfx_play(ASH_SFX_MOVE);
-        paint_help();
-        goto key_out;
-    }
     if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
         if (s_wanderer_join_modal) {
             /* 确认层打开时不睡 */
@@ -4455,8 +4618,10 @@ void ashbox_ui_on_key(bsp_btn_t btn, bsp_btn_ev_t ev)
                 s_arm_sleep = true;
                 ashbox_sfx_play(ASH_SFX_SLEEP);
             }
-        } else if (s_page == UI_PICK || s_page == UI_HUB || s_page == UI_BUILD ||
-                   s_page == UI_SETTINGS || s_page == UI_HELP || s_page == UI_QUEST ||
+        } else if (s_page == UI_PICK || s_page == UI_HUB || s_page == UI_HUB_GROUP ||
+                   s_page == UI_BUILD ||
+                   s_page == UI_SETTINGS || s_page == UI_HELP || s_page == UI_HELP_TOPIC ||
+                   s_page == UI_QUEST ||
                    s_page == UI_ORDER || s_page == UI_JOURNAL || s_page == UI_STASH ||
                    s_page == UI_RES || s_page == UI_EQUIP || s_page == UI_FARM ||
                    s_page == UI_TRADE || s_page == UI_DUTY || s_page == UI_SURVIVORS ||
@@ -4469,16 +4634,10 @@ void ashbox_ui_on_key(bsp_btn_t btn, bsp_btn_ev_t ev)
                    s_page == UI_LEG ||
                    s_page == UI_RESTART_CONFIRM) {
             go_back();
-        } else if (s_page == UI_CRISIS) {
-            /* Leave the choice pending but let the player reach the hub (parts for
-             * fortify) and let the device sleep; nothing is decided by leaving. */
-            enter_page(UI_HOME);
-            paint_home();
-        } else if (s_page == UI_REPORT) {
-            /* Leave the report pending but let the player back out to the hub; no
-             * choice is made by leaving, and the report waits on home. */
-            enter_page(UI_HOME);
-            paint_home();
+        } else if (s_page == UI_CRISIS || s_page == UI_REPORT) {
+            /* Leave the choice pending but let the player back out to its parent;
+             * nothing is decided by leaving, and home still shows the alert. */
+            go_back();
         }
         goto key_out;
     }
@@ -4561,6 +4720,8 @@ void ashbox_ui_on_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         activate_pick();
     } else if (s_page == UI_HUB) {
         activate_hub();
+    } else if (s_page == UI_HUB_GROUP) {
+        activate_hub_group();
     } else if (s_page == UI_BUILD) {
         activate_build();
     } else if (s_page == UI_ORDER) {
@@ -4613,6 +4774,8 @@ void ashbox_ui_on_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         activate_settings();
     } else if (s_page == UI_HELP) {
         activate_help();
+    } else if (s_page == UI_HELP_TOPIC) {
+        activate_help_topic();
     } else if (s_page == UI_QUEST) {
         if (!ok_guard_blocks()) go_back();
     } else if (s_page == UI_REPORT) {

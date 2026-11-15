@@ -35,6 +35,11 @@ CONFIG_LV_MEM_SIZE_KILOBYTES=64
 CONFIG_LV_TXT_ENC_UTF8=y
 CONFIG_LV_USE_FONT_PLACEHOLDER=y
 
+# --- 音频 ---
+# 壁炉 PCM 播放期间按键可能触发 NVS 写入；Flash 缓存停顿不能拖垮 I2S DMA。
+# 运行后必须核对生成的 sdkconfig 中该项为 y（只改 defaults 不会覆盖旧配置）。
+CONFIG_I2S_ISR_IRAM_SAFE=y
+
 # --- 系统 ---
 CONFIG_FREERTOS_HZ=1000
 

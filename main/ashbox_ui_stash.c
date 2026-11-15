@@ -75,10 +75,12 @@ void paint_stash(void)
         lv_obj_set_width(s_list_labels[slot], 196);
         lv_obj_set_width(s_list_subs[slot], 196);
         lv_obj_clear_flag(s_list_subs[slot], LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_size(s_list_rows[slot], 216, 34);
-        lv_obj_set_pos(s_list_rows[slot], 12, 8 + slot * 36);
-        lv_obj_set_pos(s_list_labels[slot], 10, 1);
-        lv_obj_set_pos(s_list_subs[slot], 10, 16);
+        lv_obj_set_size(s_list_rows[slot], 216, 42);
+        lv_obj_set_pos(s_list_rows[slot], 12, 8 + slot * 44);
+        lv_obj_set_pos(s_list_labels[slot], 14, 2);
+        lv_obj_set_pos(s_list_subs[slot], 14, 21);
+        lv_obj_set_height(s_list_labels[slot], 18);
+        lv_obj_set_height(s_list_subs[slot], 18);
         lv_obj_clear_flag(s_list_rows[slot], LV_OBJ_FLAG_HIDDEN);
         bool sel = (s_list_sel == i);
         lv_obj_set_style_border_color(s_list_rows[slot],

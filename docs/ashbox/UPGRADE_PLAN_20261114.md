@@ -939,7 +939,7 @@ About **100 B**; blob 776 → about 880 B. Migration: v13→v14 defaults to zero
 **C2 leg expeditions (first version)**
 
 - Two legs: Ruined Street / Hunting Grounds / overnight; three: Deep; Short still has one leg. `exp_leg_total` stores the count.
-- Reaching a boundary while awake freezes the trip there (`exp_leg_waiting=1`); the quests→expedition row says "en route", home shows "远征停住", and the "en route" page offers Continue / Withdraw.
+- Reaching a boundary while awake freezes the trip there (`exp_leg_waiting=1`); the quests→expedition row says "en route", the home screen shows a paused-expedition card with a "trip" action, and the "en route" page offers Continue / Withdraw.
 - Continue clears the wait and adds `exp_leg_extra_fail += 8` (cap 40) to the final empty-handed chance.
 - Withdraw banks `completed legs × 60%` of the trip's loot and resolves the return immediately; the person comes back and a report appears.
 - Offline or long gaps (deep sleep, or one settle of ≥15 minutes) auto-continue, so being away never leaves the trip stuck at a boundary.

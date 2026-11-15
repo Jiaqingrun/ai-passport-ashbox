@@ -84,14 +84,18 @@ void paint_settings(void)
     for (int slot = 0; slot < set_view; slot++) {
         int i = set_top + slot;
         if (i >= SETTINGS_COUNT) break;
-        lv_obj_set_size(s_list_rows[slot], 216, 32);
-        lv_obj_set_pos(s_list_rows[slot], 12, 10 + slot * 36);
-        lv_obj_set_pos(s_list_labels[slot], 10, 2);
-        lv_obj_set_pos(s_list_subs[slot], 10, 16);
+        /* Two text lines need 42 px: 18 px title + 18 px note + border/gap.
+         * The old 32 px row clipped the note's baseline. */
+        lv_obj_set_size(s_list_rows[slot], 216, 42);
+        lv_obj_set_pos(s_list_rows[slot], 12, 8 + slot * 44);
+        lv_obj_set_pos(s_list_labels[slot], 14, 2);
+        lv_obj_set_pos(s_list_subs[slot], 14, 21);
+        lv_obj_set_height(s_list_labels[slot], 18);
+        lv_obj_set_height(s_list_subs[slot], 18);
         lv_label_set_text(s_list_labels[slot], titles[i]);
         lv_label_set_text(s_list_subs[slot], subs[i]);
         lv_label_set_long_mode(s_list_labels[slot], LV_LABEL_LONG_MODE_CLIP);
-        lv_label_set_long_mode(s_list_subs[slot], LV_LABEL_LONG_MODE_CLIP);
+        lv_label_set_long_mode(s_list_subs[slot], LV_LABEL_LONG_MODE_DOTS);
         lv_obj_set_width(s_list_labels[slot], 196);
         lv_obj_set_width(s_list_subs[slot], 196);
         lv_obj_clear_flag(s_list_subs[slot], LV_OBJ_FLAG_HIDDEN);
@@ -118,7 +122,7 @@ void paint_settings(void)
     }
     set_btn(s_btn_pri, lv_obj_get_child(s_btn_pri, 0), cta, true, true);
     s_focus = 0;
-    lv_label_set_text(s_hint, status ? status : "确定长按 · 返回");
+    lv_label_set_text(s_hint, status ? status : "确定 · 长按返回");
 }
 
 void paint_settings_confirm(void)

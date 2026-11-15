@@ -28,7 +28,7 @@ int equip_craft_base(void);
 int equip_count(void);
 
 /* Page list sizes (single source of truth for unit and dispatcher). */
-#define BUILD_COUNT 17 /* +工作台；超级核心；工坊强度；计划 */
+#define BUILD_COUNT 16 /* +工作台；超级核心；工坊强度 */
 #define BUILD_VIEW 5
 #define FARM_VIEW 4
 #define SETTINGS_COUNT 7
@@ -55,10 +55,12 @@ int equip_count(void);
 typedef enum {
     UI_HOME = 0,
     UI_PICK,
-    UI_HUB, /* 据点枢纽：菜地优先，不再把菜地埋进建设 */
+    UI_HUB,       /* 据点：今日 / 站务 / 档案 / 系统 */
+    UI_HUB_GROUP, /* 站务/档案/系统的二级列表 */
     UI_BUILD,
     UI_SETTINGS,
     UI_HELP,
+    UI_HELP_TOPIC,
     UI_REPORT,
     UI_CRISIS,
     UI_QUEST,
@@ -126,7 +128,12 @@ void paint_list_sel(int count);
 
 /* Page painters implemented in their own units (called from the core dispatcher). */
 void paint_help(void);
+void paint_help_topic(void);
+extern int s_help_chapter;
+int ashbox_help_chapter_count(void);
+int ashbox_help_topic_count(void);
 void paint_trade(void);
+void paint_hub_group(void);
 void paint_stash(void);
 void paint_equip(void);
 void paint_pick(void);

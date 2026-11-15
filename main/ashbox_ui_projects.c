@@ -39,10 +39,12 @@ void paint_projects(void)
         lv_obj_set_width(s_list_labels[i], 196);
         lv_obj_set_width(s_list_subs[i], 196);
         lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_size(s_list_rows[i], 216, 36);
-        lv_obj_set_pos(s_list_rows[i], 12, 4 + i * 36);
-        lv_obj_set_pos(s_list_labels[i], 10, 1);
-        lv_obj_set_pos(s_list_subs[i], 10, 17);
+        lv_obj_set_size(s_list_rows[i], 216, 38);
+        lv_obj_set_pos(s_list_rows[i], 12, i * 38);
+        lv_obj_set_pos(s_list_labels[i], 14, 1);
+        lv_obj_set_pos(s_list_subs[i], 14, 19);
+        lv_obj_set_height(s_list_labels[i], 18);
+        lv_obj_set_height(s_list_subs[i], 18);
     }
     for (int i = ASH_PLAN_COUNT; i < ASH_LIST_MAX; i++) lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
     paint_list_sel(ASH_PLAN_COUNT);
@@ -99,8 +101,8 @@ void paint_leg(void)
         lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_size(s_list_rows[i], 216, 56);
         lv_obj_set_pos(s_list_rows[i], 12, 24 + i * 64);
-        lv_obj_set_pos(s_list_labels[i], 10, 6);
-        lv_obj_set_pos(s_list_subs[i], 10, 30);
+        lv_obj_set_pos(s_list_labels[i], 14, 6);
+        lv_obj_set_pos(s_list_subs[i], 14, 30);
     }
     for (int i = ASH_LEG_CHOICE_COUNT; i < ASH_LIST_MAX; i++) lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
     paint_list_sel(ASH_LEG_CHOICE_COUNT);

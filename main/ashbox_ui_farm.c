@@ -19,6 +19,14 @@ void paint_farm(void)
         lv_obj_clear_flag(s_list_subs[0], LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_size(s_list_rows[0], 216, 48);
         lv_obj_set_pos(s_list_rows[0], 12, 40);
+        lv_obj_set_pos(s_list_labels[0], 14, 6);
+        lv_obj_set_pos(s_list_subs[0], 14, 26);
+        lv_label_set_long_mode(s_list_labels[0], LV_LABEL_LONG_MODE_CLIP);
+        lv_label_set_long_mode(s_list_subs[0], LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_set_width(s_list_labels[0], 196);
+        lv_obj_set_width(s_list_subs[0], 196);
+        lv_obj_set_height(s_list_labels[0], 18);
+        lv_obj_set_height(s_list_subs[0], 18);
         lv_obj_clear_flag(s_list_rows[0], LV_OBJ_FLAG_HIDDEN);
         for (int i = 1; i < ASH_LIST_MAX; i++) lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
         paint_list_sel(1);
@@ -38,8 +46,9 @@ void paint_farm(void)
             if (s_g->item[ASH_ITEM_SEED] == 0)
                 snprintf(sub, sizeof(sub), "  没有稻谷种 ·去交易或远征  ·  ");
             else if (s_g->pace_era == ASHBOX_PACE_V13)
-                snprintf(sub, sizeof(sub), "  种%u ·约1天 ·基础30  ·  ",
-                         (unsigned)s_g->item[ASH_ITEM_SEED]);
+                snprintf(sub, sizeof(sub), "  种%u ·约1天 ·基础%u  ·  ",
+                         (unsigned)s_g->item[ASH_ITEM_SEED],
+                         (unsigned)ASHBOX_FARM_GRAIN_BASE);
             else
                 snprintf(sub, sizeof(sub), "  种%u ·约4时 ·收+4~6  ·  ",
                          (unsigned)s_g->item[ASH_ITEM_SEED]);
@@ -54,8 +63,9 @@ void paint_farm(void)
                 if (s_g->seed_root == 0)
                     snprintf(sub, sizeof(sub), "  没有红薯种 ·渡口可换  ·  ");
                 else if (s_g->pace_era == ASHBOX_PACE_V13)
-                    snprintf(sub, sizeof(sub), "  种%u ·约3天 ·基础240  ·  ",
-                             (unsigned)s_g->seed_root);
+                    snprintf(sub, sizeof(sub), "  种%u ·约2天 ·基础%u  ·  ",
+                             (unsigned)s_g->seed_root,
+                             (unsigned)ASHBOX_FARM_ROOT_BASE);
                 else
                     snprintf(sub, sizeof(sub), "  种%u ·约6时 ·收+7~10  ·  ",
                              (unsigned)s_g->seed_root);
@@ -113,10 +123,12 @@ void paint_farm(void)
                                (farm_act_copy[i] == 0 && s_g->item[ASH_ITEM_SEED] > 0) ||
                                (farm_act_copy[i] == 1 && s_g->seed_root > 0));
             lv_obj_clear_flag(s_list_subs[slot], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_size(s_list_rows[slot], 216, 40);
-            lv_obj_set_pos(s_list_rows[slot], 12, 10 + slot * 44);
-            lv_obj_set_pos(s_list_labels[slot], 10, 2);
-            lv_obj_set_pos(s_list_subs[slot], 10, 20);
+            lv_obj_set_size(s_list_rows[slot], 216, 42);
+            lv_obj_set_pos(s_list_rows[slot], 12, 8 + slot * 44);
+            lv_obj_set_pos(s_list_labels[slot], 14, 2);
+            lv_obj_set_pos(s_list_subs[slot], 14, 21);
+            lv_obj_set_height(s_list_labels[slot], 18);
+            lv_obj_set_height(s_list_subs[slot], 18);
             lv_obj_clear_flag(s_list_rows[slot], LV_OBJ_FLAG_HIDDEN);
             bool sel = (s_list_sel == i);
             lv_obj_set_style_border_color(s_list_rows[slot],

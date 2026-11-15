@@ -66,6 +66,14 @@ void paint_trade(void)
         lv_obj_clear_flag(s_list_subs[0], LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_size(s_list_rows[0], 216, 48);
         lv_obj_set_pos(s_list_rows[0], 12, 40);
+        lv_obj_set_pos(s_list_labels[0], 14, 6);
+        lv_obj_set_pos(s_list_subs[0], 14, 26);
+        lv_label_set_long_mode(s_list_labels[0], LV_LABEL_LONG_MODE_CLIP);
+        lv_label_set_long_mode(s_list_subs[0], LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_set_width(s_list_labels[0], 196);
+        lv_obj_set_width(s_list_subs[0], 196);
+        lv_obj_set_height(s_list_labels[0], 18);
+        lv_obj_set_height(s_list_subs[0], 18);
         lv_obj_clear_flag(s_list_rows[0], LV_OBJ_FLAG_HIDDEN);
         for (int i = 1; i < ASH_LIST_MAX; i++) lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
         paint_list_sel(1);
@@ -113,10 +121,12 @@ void paint_trade(void)
             lv_label_set_text(s_list_subs[slot], subs[slot]);
             set_cost_color(s_list_subs[slot], enough_a[slot]);
             lv_obj_clear_flag(s_list_subs[slot], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_size(s_list_rows[slot], 216, 36);
-            lv_obj_set_pos(s_list_rows[slot], 12, 10 + slot * 40);
-            lv_obj_set_pos(s_list_labels[slot], 10, 2);
-            lv_obj_set_pos(s_list_subs[slot], 10, 18);
+            lv_obj_set_size(s_list_rows[slot], 216, 42);
+            lv_obj_set_pos(s_list_rows[slot], 12, 8 + slot * 44);
+            lv_obj_set_pos(s_list_labels[slot], 14, 2);
+            lv_obj_set_pos(s_list_subs[slot], 14, 21);
+            lv_obj_set_height(s_list_labels[slot], 18);
+            lv_obj_set_height(s_list_subs[slot], 18);
             lv_obj_clear_flag(s_list_rows[slot], LV_OBJ_FLAG_HIDDEN);
             bool sel = (s_list_sel == i);
             lv_obj_set_style_border_color(s_list_rows[slot],

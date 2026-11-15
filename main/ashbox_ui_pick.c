@@ -50,11 +50,12 @@ void paint_pick(void)
             lv_obj_set_width(s_list_subs[slot], 196);
             lv_obj_set_style_anim_duration(s_list_subs[slot], 10000, LV_PART_MAIN);
             lv_obj_clear_flag(s_list_subs[slot], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_size(s_list_rows[slot], 216, 40);
+            lv_obj_set_size(s_list_rows[slot], 216, 42);
             lv_obj_set_pos(s_list_rows[slot], 12, 12 + slot * 44);
-            lv_obj_set_style_clip_corner(s_list_rows[slot], true, 0);
-            lv_obj_set_pos(s_list_labels[slot], 10, 2);
-            lv_obj_set_pos(s_list_subs[slot], 10, 20);
+            lv_obj_set_pos(s_list_labels[slot], 14, 2);
+            lv_obj_set_pos(s_list_subs[slot], 14, 21);
+            lv_obj_set_height(s_list_labels[slot], 18);
+            lv_obj_set_height(s_list_subs[slot], 18);
             lv_obj_clear_flag(s_list_rows[slot], LV_OBJ_FLAG_HIDDEN);
             bool sel = (s_list_sel == i);
             lv_obj_set_style_border_color(s_list_rows[slot],
@@ -72,6 +73,8 @@ void paint_pick(void)
         lv_label_set_text(s_title, "选人");
         count = s_g->pop;
         if (count > ASHBOX_PERSON_MAX) count = ASHBOX_PERSON_MAX;
+        if (s_list_sel < 0) s_list_sel = 0;
+        if (s_list_sel >= count) s_list_sel = (count > 0) ? count - 1 : 0;
         for (int i = 0; i < count; i++) {
             snprintf(line, sizeof(line), "%s · %s", ash_game_person_name((uint8_t)i),
                      ash_game_person_trait((uint8_t)i));
@@ -94,8 +97,8 @@ void paint_pick(void)
             lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_size(s_list_rows[i], 216, 48);
             lv_obj_set_pos(s_list_rows[i], 12, 12 + i * 52);
-            lv_obj_set_pos(s_list_labels[i], 10, 4);
-            lv_obj_set_pos(s_list_subs[i], 10, 26);
+            lv_obj_set_pos(s_list_labels[i], 14, 4);
+            lv_obj_set_pos(s_list_subs[i], 14, 26);
         }
     } else if (s_depart_step == 3) {
         lv_label_set_text(s_title, "走法");
@@ -130,8 +133,8 @@ void paint_pick(void)
             lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_size(s_list_rows[i], 216, 48);
             lv_obj_set_pos(s_list_rows[i], 12, 12 + i * 52);
-            lv_obj_set_pos(s_list_labels[i], 10, 4);
-            lv_obj_set_pos(s_list_subs[i], 10, 26);
+            lv_obj_set_pos(s_list_labels[i], 14, 4);
+            lv_obj_set_pos(s_list_subs[i], 14, 26);
         }
         for (int i = count; i < ASH_LIST_MAX; i++) lv_obj_add_flag(s_list_rows[i], LV_OBJ_FLAG_HIDDEN);
     } else {
@@ -167,8 +170,8 @@ void paint_pick(void)
             lv_obj_clear_flag(s_list_subs[i], LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_size(s_list_rows[i], 216, 48);
             lv_obj_set_pos(s_list_rows[i], 12, 12 + i * 52);
-            lv_obj_set_pos(s_list_labels[i], 10, 4);
-            lv_obj_set_pos(s_list_subs[i], 10, 26);
+            lv_obj_set_pos(s_list_labels[i], 14, 4);
+            lv_obj_set_pos(s_list_subs[i], 14, 26);
         }
     }
     paint_list_sel(count);
@@ -185,7 +188,7 @@ void paint_pick(void)
         uint16_t wc = ash_game_expedition_water_cost(s_pick_tier);
         char hb[56];
         if (s_pick_tier == ASH_TIER_DEEP || s_pick_tier == ASH_TIER_NIGHT) {
-            snprintf(hb, sizeof(hb), "耗口粮%u水%u · 适合盖上再走", (unsigned)fc, (unsigned)wc);
+            snprintf(hb, sizeof(hb), "耗口粮%u水%u · 适合进入休眠", (unsigned)fc, (unsigned)wc);
         } else {
             snprintf(hb, sizeof(hb), "耗口粮%u水%u · 不够就不能走", (unsigned)fc, (unsigned)wc);
         }

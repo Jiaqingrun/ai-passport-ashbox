@@ -16,7 +16,8 @@ static const char *TAG = "ash_sfx";
 
 /*
  * 小喇叭几乎放不出 <250Hz；过尖易破音。
- * v10：壁炉床 = 真实木柴「瞬态门」PCM——只留噼啪，间隙近静音。
+ * v11：壁炉床 = 真实木柴「瞬态门」PCM——只留噼啪，间隙近静音。
+ * 按键音不再暂停床声，而是把床声平滑压低后混入，避免按键时壁炉被掐断。
  * 全段连续火声嘶嘶在小喇叭上会被听成收音机底噪，故不再整段直通。
  */
 #define RADIO_EVENT_MIN_S      (90u * ASH_SFX_RATE)
@@ -25,6 +26,9 @@ static const char *TAG = "ash_sfx";
 #define RADIO_EVENT_FIRST_SPAN (30u * ASH_SFX_RATE)
 #define RADIO_EVENT_KINDS      5u
 #define HEARTH_BED_GAIN        155
+#define BED_SCALE_NORMAL       55
+#define BED_SCALE_VOICE        18
+#define BED_SCALE_FX           18
 
 typedef struct {
     ash_sfx_id_t id;
@@ -61,6 +65,8 @@ static radio_evt_t s_evt;
 static uint32_t s_evt_pos;
 static uint32_t s_evt_len;
 static bool s_radio_had_event;
+/* 壁炉床的音量滑杆（Q8）。按键音不再暂停床声，只把它平滑压低。 */
+static int32_t s_bed_scale_q8 = 55 * 256;
 
 /* 嵌入的真人录音：mono s16le @16kHz（CMake target_add_binary_data） */
 extern const uint8_t radio_scream_f_pcm_start[] asm("_binary_radio_scream_f_pcm_start");
@@ -112,6 +118,8 @@ static int16_t clamp16(int32_t v, int32_t lim)
     return (int16_t)v;
 }
 
+static int32_t bed_mix_sample(int32_t target_scale);
+
 /* gain: master*vol → 满档约 10000；除数越小越响 */
 static int32_t tone_gain(uint8_t vol)
 {
@@ -143,10 +151,11 @@ static void write_tone_heavy(uint16_t freq_hz, uint16_t ms, uint8_t vol)
             int32_t s0 = (int32_t)soft_osc(s_phase);
             int32_t s1 = (int32_t)soft_osc(s_phase * 2u) / 5;
             s_phase += step;
-            /* soft_osc≈±16k；gain/4500 在 master60/vol95 时接近满幅 */
-            int32_t raw = (s0 + s1) * gain / 4500 * env / 256;
+            /* soft_osc≈±16k；电台开着时留出床声余量，避免削顶 */
+            int32_t raw = (s0 + s1) * gain / (s_radio ? 5600 : 4500) * env / 256;
             s_tone_lpf += (raw - s_tone_lpf) / 4;
-            buf[i] = clamp16(s_tone_lpf, 22000);
+            int32_t bed = bed_mix_sample(BED_SCALE_FX);
+            buf[i] = clamp16(s_tone_lpf + bed, 26000);
         }
         (void)bsp_audio_write(buf, n * sizeof(int16_t));
         done += n;
@@ -173,9 +182,10 @@ static void write_thump(uint16_t ms, uint8_t vol)
             int32_t tone = (int32_t)soft_osc(ph);
             ph += step;
             int32_t nse = (int32_t)noise_samp();
-            int32_t raw = (tone * 7 / 8 + nse / 4) * gain / 4200 * env / 256;
+            int32_t raw = (tone * 7 / 8 + nse / 4) * gain / (s_radio ? 5200 : 4200) * env / 256;
             s_tone_lpf += (raw - s_tone_lpf) / 3;
-            buf[i] = clamp16(s_tone_lpf, 24000);
+            int32_t bed = bed_mix_sample(BED_SCALE_FX);
+            buf[i] = clamp16(s_tone_lpf + bed, 26000);
         }
         (void)bsp_audio_write(buf, n * sizeof(int16_t));
         done += n;
@@ -306,6 +316,20 @@ static int32_t sample_hearth_bed(void)
     return raw * HEARTH_BED_GAIN / 100 * env / 256;
 }
 
+/* 床声连续混入按键音。目标音量用 Q8 一阶平滑（约 16 ms），
+ * 避免按键开始/结束时床声突然截断或跳变。 */
+static int32_t bed_mix_sample(int32_t target_scale)
+{
+    if (!s_radio || !s_enabled) {
+        s_bed_scale_q8 = 0;
+        return 0;
+    }
+    int32_t target = target_scale * 256;
+    s_bed_scale_q8 += (target - s_bed_scale_q8) / 256;
+    int32_t raw = sample_hearth_bed();
+    return raw * s_bed_scale_q8 / 256 / 100 * (int32_t)s_master / 75;
+}
+
 static void start_radio_event(void)
 {
     uint32_t kind = (noise_u32() % RADIO_EVENT_KINDS) + 1u;
@@ -362,7 +386,7 @@ static void write_radio_chunk(void)
 
     for (int i = 0; i < ASH_SFX_CHUNK; i++) {
         uint32_t abs_i = s_radio_samples + (uint32_t)i;
-        int32_t bed = sample_hearth_bed();
+        int32_t bed = bed_mix_sample(s_evt != RADIO_EVT_NONE ? BED_SCALE_VOICE : BED_SCALE_NORMAL);
 
         int32_t voice = 0;
         if (s_evt != RADIO_EVT_NONE) {
@@ -380,11 +404,10 @@ static void write_radio_chunk(void)
             if (s_evt != RADIO_EVT_NONE) voice = sample_radio_voice();
         }
 
-        /* 人声事件时压低壁炉，避免盖过求救/笑声 */
-        int32_t bed_scale = (s_evt != RADIO_EVT_NONE) ? 18 : 55;
+        /* 人声事件时压低壁炉，避免盖过求救/笑声；床声已含 master。 */
         int32_t voice_scale = (s_evt != RADIO_EVT_NONE) ? 140 : 0;
-        int32_t v = (bed * bed_scale / 100 + voice * voice_scale / 100) * amp / 75;
-        buf[i] = clamp16(v, 22000);
+        int32_t v = bed + voice * voice_scale / 100 * amp / 75;
+        buf[i] = clamp16(v, 24000);
     }
 
     s_radio_samples += ASH_SFX_CHUNK;
@@ -443,7 +466,7 @@ esp_err_t ashbox_sfx_init(void)
     /* 开机三连音：一听就知道新固件音效已上电 */
     ash_sfx_evt_t boot = {.id = ASH_SFX_CONFIRM};
     (void)xQueueSend(s_q, &boot, 0);
-    ESP_LOGI(TAG, "sfx ready v10 hearth-sparse (%u samples)", (unsigned)hearth_sample_count());
+    ESP_LOGI(TAG, "sfx ready v11 hearth-continuous (%u samples)", (unsigned)hearth_sample_count());
     return ESP_OK;
 }
 
